@@ -1,9 +1,9 @@
 name: Agent display-name cleanup
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/display-name-renaming
+      - master
 
 permissions:
   contents: write
