@@ -180,7 +180,7 @@ fn position_near_tray(
             // Bottom taskbar — panel above the tray icon
             tray_top_y - actual_height
         } else {
-            // Top menu bar — panel below the icon
+            // Top menu bar — panel below the tray icon
             tray_bottom_y
         }
     } else {
