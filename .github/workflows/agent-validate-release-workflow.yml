@@ -1,0 +1,25 @@
+name: Agent validate release workflow
+
+on:
+  push:
+    branches:
+      - agent/release-v0.8.5
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+      - name: Validate GitHub Actions workflows
+        run: "$(go env GOPATH)/bin/actionlint" .github/workflows/release-build.yml
+      - name: Verify release metadata
+        run: |
+          grep -q 'version = "0.8.5"' Cargo.toml
+          grep -q '"version": "0.8.5"' apps/desktop/package.json
+          grep -q '"version": "0.8.5"' apps/desktop/src-tauri/tauri.conf.json
+          grep -q '## \[0.8.5\]' CHANGELOG.md
