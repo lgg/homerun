@@ -33,14 +33,7 @@ jobs:
         run: python .github/scripts/cleanup_display_name_pr.py
 
       - name: Test daemon and TUI workspace
-        run: cargo test --workspace > cargo-test-clean.log 2>&1
-
-      - name: Upload Rust diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: display-name-clean-rust-log
-          path: cargo-test-clean.log
+        run: cargo test --workspace
 
       - name: Install desktop dependencies
         working-directory: apps/desktop
@@ -59,20 +52,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Check Tauri bridge
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml > tauri-check-clean.log 2>&1
+      - name: Prepare Tauri sidecar
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/debug/homerund "apps/desktop/src-tauri/binaries/homerund-$(rustc -vV | awk '/host:/ {print $2}')"
 
-      - name: Upload Tauri diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: display-name-clean-tauri-log
-          path: tauri-check-clean.log
+      - name: Check Tauri bridge
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Remove temporary cleanup files
         run: |
           rm .github/scripts/cleanup_display_name_pr.py
           rm .github/workflows/agent-display-name-cleanup.yml
+          rm -rf apps/desktop/src-tauri/binaries
 
       - name: Commit cleaned implementation
         run: |
