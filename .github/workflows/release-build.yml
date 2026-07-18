@@ -239,21 +239,19 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: List artifacts
-        run: find artifacts -maxdepth 2 -type f -print | sort
+      - name: Flatten release artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -exec cp '{}' release-assets/ \;
+
+      - name: List release artifacts
+        run: find release-assets -maxdepth 1 -type f -print | sort
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/*.dmg
-            artifacts/*.tar.gz
-            artifacts/*.zip
-            artifacts/*.msi
-            artifacts/*.exe
-            artifacts/*.AppImage
-            artifacts/*.deb
-            artifacts/*.rpm
+          files: release-assets/*
+          fail_on_unmatched_files: true
           draft: false
           generate_release_notes: true
 
