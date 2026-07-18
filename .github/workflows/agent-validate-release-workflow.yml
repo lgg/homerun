@@ -19,7 +19,8 @@ jobs:
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
       - name: Validate GitHub Actions workflows
-        run: "$(go env GOPATH)/bin/actionlint" .github/workflows/release-build.yml
+        run: |
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/release-build.yml
       - name: Verify release metadata
         run: |
           grep -q 'version = "0.8.5"' Cargo.toml
