@@ -9,6 +9,18 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.8.5](https://github.com/lgg/homerun/compare/v0.8.4...v0.8.5) (2026-07-18)
+
+### Features
+
+* add editable HomeRun-only display names while preserving GitHub runner names
+
+### Bug Fixes
+
+* reopen the main application window from the tray after it was closed
+* persist runner PATCH updates and support clearing display names safely
+* prepare release packaging for available GitHub-hosted runners
+
 ## [0.8.4](https://github.com/aGallea/homerun/compare/v0.8.3...v0.8.4) (2026-05-02)
 
 
