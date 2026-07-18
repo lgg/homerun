@@ -1,0 +1,44 @@
+name: Agent create v0.8.5 tag
+
+on:
+  push:
+    branches:
+      - agent/tag-v0.8.5
+
+permissions:
+  contents: read
+
+jobs:
+  create-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create v0.8.5 tag on master
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          TAG_NAME: v0.8.5
+        shell: bash
+        run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "RELEASE_TOKEN is not configured"
+            exit 1
+          fi
+
+          MASTER_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq '.object.sha')
+          echo "master=${MASTER_SHA}"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            EXISTING_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG_NAME}" --jq '.object.sha')
+            if [[ "${EXISTING_SHA}" != "${MASTER_SHA}" ]]; then
+              echo "${TAG_NAME} already exists at ${EXISTING_SHA}, expected ${MASTER_SHA}"
+              exit 1
+            fi
+            echo "${TAG_NAME} already points to master"
+            exit 0
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --method POST \
+            -f "ref=refs/tags/${TAG_NAME}" \
+            -f "sha=${MASTER_SHA}"
+
+          echo "Created ${TAG_NAME} at ${MASTER_SHA}"
