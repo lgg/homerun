@@ -1,0 +1,168 @@
+name: Agent prepare v0.8.5
+
+on:
+  push:
+    branches:
+      - agent/release-v0.8.5
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/release-v0.8.5
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Apply version and release changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          version = "0.8.5"
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise RuntimeError(f"Expected exactly one occurrence in {path}: {old!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once("Cargo.toml", 'version = "0.8.4"', f'version = "{version}"')
+          replace_once("apps/desktop/src-tauri/Cargo.toml", 'version = "0.8.4"', f'version = "{version}"')
+          replace_once("apps/desktop/src-tauri/tauri.conf.json", '"version": "0.8.4"', f'"version": "{version}"')
+          replace_once("apps/desktop/package.json", '"version": "0.8.4"', f'"version": "{version}"')
+
+          package_lock = Path("apps/desktop/package-lock.json")
+          lock_data = json.loads(package_lock.read_text(encoding="utf-8"))
+          lock_data["version"] = version
+          lock_data["packages"][""]["version"] = version
+          package_lock.write_text(json.dumps(lock_data, indent=2) + "\n", encoding="utf-8")
+
+          manifest = Path(".release-please-manifest.json")
+          manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+          manifest_data["."] = version
+          manifest.write_text(json.dumps(manifest_data, indent=2) + "\n", encoding="utf-8")
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text(encoding="utf-8")
+          marker = "---\n\n"
+          section = """## [0.8.5](https://github.com/lgg/homerun/compare/v0.8.4...v0.8.5) (2026-07-18)\n\n### Features\n\n* add editable HomeRun-only display names while preserving GitHub runner names\n\n### Bug Fixes\n\n* reopen the main application window from the tray after it was closed\n* persist runner PATCH updates and support clearing display names safely\n* run release packaging on available GitHub-hosted macOS and Ubuntu runners\n\n"""
+          if "## [0.8.5]" not in changelog_text:
+              if marker not in changelog_text:
+                  raise RuntimeError("Unable to locate changelog insertion marker")
+              changelog.write_text(changelog_text.replace(marker, marker + section, 1), encoding="utf-8")
+
+          workflow = Path(".github/workflows/release-build.yml")
+          text = workflow.read_text(encoding="utf-8")
+          literal_matrix_os = "$" + "{{ matrix.os }}"
+          text = text.replace("runs-on: [self-hosted, macOS]", f"runs-on: {literal_matrix_os}", 1)
+          text = text.replace(
+              "          - target: aarch64-apple-darwin\n            arch: aarch64\n",
+              "          - target: aarch64-apple-darwin\n            arch: aarch64\n            os: macos-15\n",
+              1,
+          )
+          text = text.replace(
+              "          - target: x86_64-apple-darwin\n            arch: x86_64\n",
+              "          - target: x86_64-apple-darwin\n            arch: x86_64\n            os: macos-15-intel\n",
+              1,
+          )
+          text, count = re.subn(
+              r"(  release:\n    name: Create GitHub Release\n    needs: \[build-macos, build-windows\]\n)    runs-on: self-hosted",
+              r"\1    runs-on: ubuntu-latest",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise RuntimeError("Unable to update release job runner")
+          text = text.replace("          draft: false\n", "          draft: false\n          generate_release_notes: true\n", 1)
+          text = text.replace(
+              "  update-tap:\n    name: Update Homebrew Tap\n",
+              "  update-tap:\n    name: Update Homebrew Tap\n    if: github.repository == 'aGallea/homerun'\n",
+              1,
+          )
+          text = text.replace("          if-no-files-found: error\n", "          if-no-files-found: error\n          retention-days: 1\n")
+          text = text.replace("          if-no-files-found: warn\n", "          if-no-files-found: warn\n          retention-days: 1\n")
+          workflow.write_text(text, encoding="utf-8")
+
+          inspection = Path(".release-inspection.txt")
+          if inspection.exists():
+              inspection.unlink()
+          PY
+
+      - name: Regenerate lock files
+        shell: bash
+        run: |
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cd apps/desktop
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Validate version consistency
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          expected = "0.8.5"
+          assert f'version = "{expected}"' in Path("Cargo.toml").read_text()
+          assert f'version = "{expected}"' in Path("apps/desktop/src-tauri/Cargo.toml").read_text()
+          assert json.loads(Path("apps/desktop/package.json").read_text())["version"] == expected
+          assert json.loads(Path("apps/desktop/package-lock.json").read_text())["version"] == expected
+          assert json.loads(Path("apps/desktop/src-tauri/tauri.conf.json").read_text())["version"] == expected
+          assert json.loads(Path(".release-please-manifest.json").read_text())["."] == expected
+          PY
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Test desktop frontend
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Prepare Tauri sidecar
+        run: |
+          cargo build -p homerund
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/debug/homerund apps/desktop/src-tauri/binaries/homerund-x86_64-unknown-linux-gnu
+
+      - name: Check Tauri application
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Remove temporary workflow and commit release preparation
+        shell: bash
+        run: |
+          git rm .github/workflows/agent-prepare-v0.8.5.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: prepare v0.8.5 release"
+          git push origin HEAD:agent/release-v0.8.5
