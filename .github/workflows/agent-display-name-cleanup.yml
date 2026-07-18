@@ -60,7 +60,14 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Check Tauri bridge
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml > tauri-check-clean.log 2>&1
+
+      - name: Upload Tauri diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: display-name-clean-tauri-log
+          path: tauri-check-clean.log
 
       - name: Remove temporary cleanup files
         run: |
