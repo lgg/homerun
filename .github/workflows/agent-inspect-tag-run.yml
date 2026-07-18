@@ -1,0 +1,37 @@
+name: Agent inspect v0.8.5 tag run
+
+on:
+  push:
+    branches:
+      - agent/inspect-release-prep-run
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-release-prep-run
+      - name: Inspect tag workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-create-v0.8.5-tag.yml/runs?branch=agent%2Ftag-v0.8.5&per_page=1")
+          echo "$RUN_JSON" | jq '.workflow_runs[0] | {id,status,conclusion,event,head_sha,html_url,created_at,updated_at}' > .tag-run-status.txt
+          RUN_ID=$(echo "$RUN_JSON" | jq -r '.workflow_runs[0].id')
+          if [[ "$RUN_ID" != "null" ]]; then
+            echo >> .tag-run-status.txt
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --jq '.jobs[] | {id,name,status,conclusion,steps}' >> .tag-run-status.txt
+          fi
+      - name: Commit status and remove workflow
+        run: |
+          git rm .github/workflows/agent-inspect-tag-run.yml
+          git add .tag-run-status.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record v0.8.5 tag workflow status"
+          git push origin HEAD:agent/inspect-release-prep-run
