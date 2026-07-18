@@ -28,7 +28,6 @@ export function TrayPanel() {
   const { runners, error } = useRunners();
   const daemonOk = error === null;
   const [daemonStopping, setDaemonStopping] = useState(false);
-  const [mainVisible, setMainVisible] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useTrayIcon(runners, daemonOk);
@@ -137,22 +136,14 @@ export function TrayPanel() {
       </div>
 
       <div className="tray-actions">
+        <button className="tray-action" onClick={() => api.showMainWindow()}>
+          Open Main Window
+        </button>
         <button className="tray-action" onClick={() => api.toggleMiniWindow()}>
           Toggle Mini View
         </button>
-        <button
-          className="tray-action"
-          onClick={async () => {
-            if (mainVisible) {
-              await api.hideAllWindows();
-              setMainVisible(false);
-            } else {
-              await api.showMainWindow();
-              setMainVisible(true);
-            }
-          }}
-        >
-          {mainVisible ? "Hide View" : "Show View"}
+        <button className="tray-action" onClick={() => api.hideAllWindows()}>
+          Hide View
         </button>
         <button
           className="tray-action danger"
