@@ -1,0 +1,41 @@
+name: Agent inspect Linux release attachment
+
+on:
+  push:
+    branches:
+      - agent/inspect-release-prep-run
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-release-prep-run
+      - name: Inspect attachment workflow and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-attach-v0.8.5-linux.yml/runs?branch=agent%2Fattach-v0.8.5-linux&per_page=1")
+          {
+            echo '=== RUN ==='
+            echo "$RUN_JSON" | jq '.workflow_runs[0] | {id,status,conclusion,head_sha,html_url,created_at,updated_at}'
+            RUN_ID=$(echo "$RUN_JSON" | jq -r '.workflow_runs[0].id')
+            if [[ "$RUN_ID" != "null" ]]; then
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --jq '.jobs[] | {id,name,status,conclusion,steps}'
+            fi
+            echo '=== RELEASE ASSETS ==='
+            gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.8.5" --jq '.assets[] | [.name, .size, .state] | @tsv'
+          } > .linux-attach-status.txt
+      - name: Commit status and remove workflow
+        run: |
+          git rm .github/workflows/agent-inspect-linux-attach.yml
+          git add .linux-attach-status.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record Linux attachment status"
+          git push origin HEAD:agent/inspect-release-prep-run
