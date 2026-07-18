@@ -1,0 +1,76 @@
+name: Agent minimize Tauri diff
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: write
+
+jobs:
+  minimize-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/display-name-renaming
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Minimize Tauri diff
+        run: python .github/scripts/minimize_tauri_diff.py
+
+      - name: Test daemon and TUI workspace
+        run: cargo test --workspace
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Test desktop frontend
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Prepare Tauri sidecar
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/debug/homerund "apps/desktop/src-tauri/binaries/homerund-$(rustc -vV | awk '/host:/ {print $2}')"
+
+      - name: Check Tauri bridge
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Remove temporary files
+        run: |
+          rm .github/scripts/minimize_tauri_diff.py
+          rm .github/workflows/agent-minimize-tauri-diff.yml
+          rm apps/desktop/src-tauri/binaries/homerund-*
+
+      - name: Commit minimized diff
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "chore: minimize Tauri display name diff"
+          git push origin HEAD:agent/display-name-renaming
