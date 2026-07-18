@@ -1,0 +1,390 @@
+=== WORKFLOWS ===
+.github/workflows/agent-inspect-release.yml
+.github/workflows/ci.yml
+.github/workflows/coverage-badge.yml
+.github/workflows/release-build.yml
+.github/workflows/release-please.yml
+
+=== WORKFLOW HEADERS ===
+--- .github/workflows/agent-inspect-release.yml
+name: Agent inspect release setup
+
+on:
+  push:
+    branches:
+      - agent/release-v0.8.5
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/release-v0.8.5
+          fetch-depth: 0
+
+      - name: Write release inspection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '=== WORKFLOWS ==='
+            find .github/workflows -maxdepth 1 -type f -print | sort
+            echo
+            echo '=== WORKFLOW HEADERS ==='
+            for file in .github/workflows/*; do
+              echo "--- $file"
+              sed -n '1,100p' "$file"
+            done
+            echo
+            echo '=== VERSIONS ==='
+            grep -R --line-number --exclude-dir=target --exclude='package-lock.json' '0\.8\.4' Cargo.toml crates apps/desktop | head -100 || true
+            echo
+            echo '=== TAGS ==='
+            git tag --sort=-v:refname | head -20
+            echo
+            echo '=== RELEASES ==='
+            gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=20" \
+              --jq '.[] | [.tag_name, ("draft=" + (.draft|tostring)), ("prerelease=" + (.prerelease|tostring)), ("assets=" + (.assets|length|tostring))] | @tsv'
+          } > .release-inspection.txt
+
+      - name: Commit inspection and remove temporary workflow
+        shell: bash
+        run: |
+          git rm .github/workflows/agent-inspect-release.yml
+          git add .release-inspection.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record release configuration inspection"
+          git push origin HEAD:agent/release-v0.8.5
+--- .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+  # NOTE: CI runs on self-hosted runners. External contributors will need a
+  # maintainer to approve and run CI on their PRs.
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Add Rust toolchain and Git to PATH
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          TOOLCHAIN_BIN="$(dirname "$(rustup which rustc)")"
+          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+          # Ensure git.exe is in PATH for pre-commit on Windows
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            echo "/c/Program Files/Git/cmd" >> $GITHUB_PATH
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        id: setup-python
+        continue-on-error: true
+        with:
+          python-version: "3.x"
+
+      - name: Fallback Python (Windows)
+        if: steps.setup-python.outcome == 'failure' && runner.os == 'Windows'
+        run: |
+          # setup-python may fail on self-hosted Windows due to registry
+          # permissions.  Search all runner tool caches for a cached Python.
+          for dir in "$HOME/.homerun/runners"/*/_work/_tool/Python/*/x64; do
+            if [[ -x "$dir/python.exe" ]]; then
+              echo "Found Python at $dir"
+              echo "$dir" >> $GITHUB_PATH
+              echo "$dir/Scripts" >> $GITHUB_PATH
+              break
+            fi
+          done
+
+      - name: Install pre-commit
+        run: |
+          # macOS self-hosted runners may only have python3
+          if command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
+            python3 -m pip install pre-commit --quiet --break-system-packages 2>/dev/null \
+              || python3 -m pip install pre-commit --quiet
+          else
+            python -m pip install pre-commit --quiet
+          fi
+
+      - name: Install Node dependencies
+        run: cd apps/desktop && npm ci
+
+      - name: Run pre-commit
+        run: |
+          if command -v pre-commit &>/dev/null; then
+            pre-commit run --all-files --show-diff-on-failure
+          else
+            python3 -m pre_commit run --all-files --show-diff-on-failure
+          fi
+        env:
+          SKIP: no-commit-to-branch,cargo-test,cargo-clippy
+
+  react-test:
+    name: React (test + coverage)
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/desktop
+    steps:
+--- .github/workflows/coverage-badge.yml
+name: Coverage Badge
+
+on:
+  push:
+    branches: [master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  update-badge:
+    name: Update coverage badge
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Node dependencies
+        run: cd apps/desktop && npm ci
+
+      - name: Run React tests with coverage
+        run: cd apps/desktop && npm run test:coverage
+
+      - name: Add Rust to PATH
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          echo "$(dirname "$(rustup which rustc)")" >> $GITHUB_PATH
+
+      - name: Install cargo-llvm-cov
+        run: which cargo-llvm-cov || cargo install cargo-llvm-cov --quiet
+
+      - name: Run tests with coverage
+        run: cargo llvm-cov -p homerund -p homerun --all-features --summary-only 2>&1 | tee coverage-summary.txt
+
+      - name: Clean Rust build artifacts
+        if: always()
+        run: cargo clean
+
+      - name: Update badge
+        env:
+          GIST_SECRET: ${{ secrets.GIST_SECRET }}
+        run: |
+          COVERAGE=$(grep "^TOTAL" coverage-summary.txt | grep -oE '[0-9]+\.[0-9]+%' | sed -n '3p' | sed 's/%//')
+          echo "Coverage: $COVERAGE%"
+          # Map 50-95% to hue 0(red)-120(green)
+          HUE=$(awk "BEGIN {h=($COVERAGE-50)/(95-50)*120; if(h<0)h=0; if(h>120)h=120; printf \"%.0f\", h}")
+          # Build badge JSON and gist payload (no jq dependency)
+          BADGE="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"hsl($HUE, 100%, 40%)\"}"
+          PAYLOAD="{\"files\":{\"coverage.json\":{\"content\":$(printf '%s' "$BADGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')}}}"
+          curl -sf -X PATCH \
+            -H "Authorization: token $GIST_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            https://api.github.com/gists/77f18f115b500bdc5d6df52f95d399b9
+--- .github/workflows/release-build.yml
+name: Release Build
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    name: Build macOS (${{ matrix.arch }})
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build homerund sidecar
+        run: |
+          cargo build --release -p homerund --target ${{ matrix.target }}
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/${{ matrix.target }}/release/homerund \
+            apps/desktop/src-tauri/binaries/homerund-${{ matrix.target }}
+
+      - name: Build homerun CLI
+        run: cargo build --release -p homerun --target ${{ matrix.target }}
+
+      - name: Package CLI binaries
+        run: |
+          mkdir -p cli-dist
+          cp target/${{ matrix.target }}/release/homerun cli-dist/
+          cp target/${{ matrix.target }}/release/homerund cli-dist/
+          tar -czf homerun-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C cli-dist .
+
+      - name: Upload CLI tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.arch }}
+          path: homerun-*.tar.gz
+          if-no-files-found: error
+
+      - name: Clean Tauri build cache
+        working-directory: apps/desktop/src-tauri
+        run: cargo clean
+
+      - name: Build Tauri app
+        working-directory: apps/desktop
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HomeRun-${{ matrix.arch }}
+          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+--- .github/workflows/release-please.yml
+name: Release Please
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: self-hosted
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      # When release-please creates/updates a PR, regenerate Cargo.lock files
+      # so they stay in sync with the version bump in Cargo.toml
+      - uses: actions/checkout@v6
+        if: ${{ steps.release.outputs.pr }}
+        with:
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Add Rust to PATH
+        if: ${{ steps.release.outputs.pr }}
+        run: |
+          source "$HOME/.cargo/env" 2>/dev/null || true
+          echo "$(dirname "$(rustup which rustc)")" >> $GITHUB_PATH
+
+      - name: Regenerate Cargo.lock files
+        if: ${{ steps.release.outputs.pr }}
+        run: |
+          cargo generate-lockfile
+          cd apps/desktop/src-tauri && cargo generate-lockfile
+
+      - name: Commit updated Cargo.lock files
+        if: ${{ steps.release.outputs.pr }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock apps/desktop/src-tauri/Cargo.lock
+          git diff --cached --quiet || git commit -m "chore: update Cargo.lock files for version bump"
+          git push
+
+=== VERSIONS ===
+Cargo.toml:6:version = "0.8.4"
+apps/desktop/src-tauri/tauri.conf.json:3:  "version": "0.8.4",
+apps/desktop/src-tauri/Cargo.lock:1479:version = "0.8.4"
+apps/desktop/src-tauri/Cargo.toml:6:version = "0.8.4"
+apps/desktop/package.json:4:  "version": "0.8.4",
+
+=== TAGS ===
+
+=== RELEASES ===
