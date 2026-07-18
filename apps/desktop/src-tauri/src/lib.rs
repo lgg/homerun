@@ -32,8 +32,13 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let settings =
-                MenuItem::with_id(app, "settings", "Settings...", true, Some("CmdOrCtrl+,"))?;
+            let settings = MenuItem::with_id(
+                app,
+                "settings",
+                "Settings...",
+                true,
+                Some("CmdOrCtrl+,"),
+            )?;
 
             let about_metadata = AboutMetadata {
                 name: Some("HomeRun".into()),
@@ -77,8 +82,13 @@ pub fn run() {
                 .close_window()
                 .build()?;
 
-            let github_item =
-                MenuItem::with_id(app, "open_github", "HomeRun on GitHub", true, None::<&str>)?;
+            let github_item = MenuItem::with_id(
+                app,
+                "open_github",
+                "HomeRun on GitHub",
+                true,
+                None::<&str>,
+            )?;
             let report_issue = MenuItem::with_id(
                 app,
                 "report_issue",
@@ -106,9 +116,10 @@ pub fn run() {
                 use tauri_plugin_opener::OpenerExt;
                 match event.id().as_ref() {
                     "check_updates" => {
-                        let _ = app_handle
-                            .opener()
-                            .open_url("https://github.com/aGallea/homerun/releases", None::<&str>);
+                        let _ = app_handle.opener().open_url(
+                            "https://github.com/aGallea/homerun/releases",
+                            None::<&str>,
+                        );
                     }
                     "toggle_mini" => {
                         let _ = crate::window::toggle_mini_window(app_handle);
@@ -117,9 +128,10 @@ pub fn run() {
                         let _ = app_handle.emit("navigate", "/settings");
                     }
                     "open_github" => {
-                        let _ = app_handle
-                            .opener()
-                            .open_url("https://github.com/aGallea/homerun", None::<&str>);
+                        let _ = app_handle.opener().open_url(
+                            "https://github.com/aGallea/homerun",
+                            None::<&str>,
+                        );
                     }
                     "report_issue" => {
                         let _ = app_handle.opener().open_url(

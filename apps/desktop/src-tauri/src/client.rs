@@ -366,7 +366,8 @@ impl tower::Service<hyper::Uri> for NamedPipeConnector {
     fn call(&mut self, _uri: hyper::Uri) -> Self::Future {
         let pipe_name = self.pipe_name.clone();
         Box::pin(async move {
-            let client = tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?;
+            let client =
+                tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?;
             Ok(hyper_util::rt::TokioIo::new(client))
         })
     }
@@ -615,66 +616,34 @@ impl DaemonClient {
     }
 
     pub async fn get_runner_steps(&self, runner_id: &str) -> Result<StepsResponse, String> {
-        let body = self
-            .request("GET", &format!("/runners/{runner_id}/steps"), None)
-            .await?;
+        let body = self.request("GET", &format!("/runners/{runner_id}/steps"), None).await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
 
-    pub async fn get_step_logs(
-        &self,
-        runner_id: &str,
-        step_number: u16,
-    ) -> Result<StepLogsResponse, String> {
-        let body = self
-            .request(
-                "GET",
-                &format!("/runners/{runner_id}/steps/{step_number}/logs"),
-                None,
-            )
-            .await?;
+    pub async fn get_step_logs(&self, runner_id: &str, step_number: u16) -> Result<StepLogsResponse, String> {
+        let body = self.request("GET", &format!("/runners/{runner_id}/steps/{step_number}/logs"), None).await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
 
-    pub async fn get_runner_history(
-        &self,
-        runner_id: &str,
-    ) -> Result<Vec<JobHistoryEntry>, String> {
-        let body = self
-            .request("GET", &format!("/runners/{runner_id}/history"), None)
-            .await?;
+    pub async fn get_runner_history(&self, runner_id: &str) -> Result<Vec<JobHistoryEntry>, String> {
+        let body = self.request("GET", &format!("/runners/{runner_id}/history"), None).await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
 
     pub async fn rerun_workflow(&self, runner_id: &str, run_url: &str) -> Result<(), String> {
         let payload = serde_json::json!({ "run_url": run_url }).to_string();
-        self.request(
-            "POST",
-            &format!("/runners/{runner_id}/rerun"),
-            Some(payload),
-        )
-        .await?;
+        self.request("POST", &format!("/runners/{runner_id}/rerun"), Some(payload)).await?;
         Ok(())
     }
 
     pub async fn clear_runner_history(&self, runner_id: &str) -> Result<(), String> {
-        self.request("DELETE", &format!("/runners/{runner_id}/history"), None)
-            .await?;
+        self.request("DELETE", &format!("/runners/{runner_id}/history"), None).await?;
         Ok(())
     }
 
-    pub async fn delete_history_entry(
-        &self,
-        runner_id: &str,
-        started_at: &str,
-    ) -> Result<(), String> {
+    pub async fn delete_history_entry(&self, runner_id: &str, started_at: &str) -> Result<(), String> {
         let payload = serde_json::json!({ "started_at": started_at }).to_string();
-        self.request(
-            "DELETE",
-            &format!("/runners/{runner_id}/history/entry"),
-            Some(payload),
-        )
-        .await?;
+        self.request("DELETE", &format!("/runners/{runner_id}/history/entry"), Some(payload)).await?;
         Ok(())
     }
 
@@ -685,52 +654,35 @@ impl DaemonClient {
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
 
-    pub async fn create_batch(
-        &self,
-        req: &CreateBatchRequest,
-    ) -> Result<BatchCreateResponse, String> {
+    pub async fn create_batch(&self, req: &CreateBatchRequest) -> Result<BatchCreateResponse, String> {
         let body = serde_json::to_string(req).map_err(|e| e.to_string())?;
         let text = self.request("POST", "/runners/batch", Some(body)).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
     pub async fn start_group(&self, group_id: &str) -> Result<GroupActionResponse, String> {
-        let text = self
-            .request("POST", &format!("/runners/groups/{group_id}/start"), None)
-            .await?;
+        let text = self.request("POST", &format!("/runners/groups/{group_id}/start"), None).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
     pub async fn stop_group(&self, group_id: &str) -> Result<GroupActionResponse, String> {
-        let text = self
-            .request("POST", &format!("/runners/groups/{group_id}/stop"), None)
-            .await?;
+        let text = self.request("POST", &format!("/runners/groups/{group_id}/stop"), None).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
     pub async fn restart_group(&self, group_id: &str) -> Result<GroupActionResponse, String> {
-        let text = self
-            .request("POST", &format!("/runners/groups/{group_id}/restart"), None)
-            .await?;
+        let text = self.request("POST", &format!("/runners/groups/{group_id}/restart"), None).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
     pub async fn delete_group(&self, group_id: &str) -> Result<GroupActionResponse, String> {
-        let text = self
-            .request("DELETE", &format!("/runners/groups/{group_id}"), None)
-            .await?;
+        let text = self.request("DELETE", &format!("/runners/groups/{group_id}"), None).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
-    pub async fn scale_group(
-        &self,
-        group_id: &str,
-        count: u8,
-    ) -> Result<ScaleGroupResponse, String> {
+    pub async fn scale_group(&self, group_id: &str, count: u8) -> Result<ScaleGroupResponse, String> {
         let body = serde_json::json!({ "count": count }).to_string();
-        let text = self
-            .request("PATCH", &format!("/runners/groups/{group_id}"), Some(body))
-            .await?;
+        let text = self.request("PATCH", &format!("/runners/groups/{group_id}"), Some(body)).await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 
@@ -759,7 +711,8 @@ impl DaemonClient {
     /// Returns the number of active runners being stopped during shutdown.
     pub async fn shutdown(&self) -> Result<usize, String> {
         let body = self.request("POST", "/daemon/shutdown", None).await?;
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::json!({}));
+        let json: serde_json::Value =
+            serde_json::from_str(&body).unwrap_or(serde_json::json!({}));
         Ok(json["active_runners"].as_u64().unwrap_or(0) as usize)
     }
 

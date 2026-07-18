@@ -3,20 +3,23 @@ use tauri::State;
 use crate::client::{
     AuthStatus, BatchCreateResponse, CreateBatchRequest, CreateRunnerRequest, DaemonLogEntry,
     DeviceFlowResponse, DiscoveredRepo, GroupActionResponse, JobHistoryEntry, LogEntry,
-    MetricsResponse, Preferences, RepoInfo, RunnerInfo, ScaleGroupResponse, ScanResults,
+    MetricsResponse, Preferences, RepoInfo, RunnerInfo, ScanResults, ScaleGroupResponse,
     StepLogsResponse, StepsResponse,
 };
 use crate::AppState;
 
 #[tauri::command]
 pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> {
-    use std::time::Duration;
     use tauri_plugin_shell::ShellExt;
+    use std::time::Duration;
 
     // Check if daemon is already running
     let client = crate::client::DaemonClient::default_socket();
     if client.socket_exists() {
-        let check = tokio::time::timeout(std::time::Duration::from_secs(2), client.health()).await;
+        let check = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.health(),
+        ).await;
         if matches!(check, Ok(Ok(_))) {
             return Err("Daemon is already running".to_string());
         }
@@ -63,10 +66,7 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
             if msg.contains("launchd") || msg.contains("Uninstall the service") {
                 // Uninstall the launchd service, then retry shutdown
                 let retry_client = client.clone_connection();
-                retry_client
-                    .uninstall_service()
-                    .await
-                    .map_err(|e| format!("Failed to uninstall launchd service: {e}"))?;
+                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall launchd service: {e}"))?;
                 // Retry shutdown after uninstalling service
                 match retry_client.shutdown().await {
                     Ok(count) => count,
@@ -77,9 +77,7 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
                         }
                         let msg2 = e2.to_string();
                         if !msg2.contains("connect") {
-                            return Err(format!(
-                                "Failed to stop daemon after uninstalling service: {msg2}"
-                            ));
+                            return Err(format!("Failed to stop daemon after uninstalling service: {msg2}"));
                         }
                         0
                     }
@@ -130,7 +128,12 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<bool, String> {
     // Use a fresh client to avoid mutex contention with other commands
     // that may be hanging when the daemon is down.
     let check_client = state.client.lock().await.clone_connection();
-    match tokio::time::timeout(std::time::Duration::from_secs(2), check_client.health()).await {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        check_client.health(),
+    )
+    .await
+    {
         Ok(Ok(_)) => Ok(true),
         _ => Ok(false),
     }
@@ -428,7 +431,10 @@ pub async fn get_daemon_logs_recent(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn update_tray_icon(app_handle: tauri::AppHandle, state: String) -> Result<(), String> {
+pub async fn update_tray_icon(
+    app_handle: tauri::AppHandle,
+    state: String,
+) -> Result<(), String> {
     crate::tray::update_icon(&app_handle, &state)
 }
 
@@ -457,7 +463,9 @@ pub async fn save_mini_position(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_mini_position(app_handle: tauri::AppHandle) -> Result<Option<(f64, f64)>, String> {
+pub async fn get_mini_position(
+    app_handle: tauri::AppHandle,
+) -> Result<Option<(f64, f64)>, String> {
     Ok(crate::window::load_mini_position(&app_handle).map(|p| (p.x, p.y)))
 }
 
@@ -483,10 +491,7 @@ pub async fn start_scan(
         let scan_client = base_client.clone_connection();
         tokio::spawn(async move {
             let body = serde_json::json!({ "path": path }).to_string();
-            if let Ok(text) = scan_client
-                .request("POST", "/scan/local/stream", Some(body))
-                .await
-            {
+            if let Ok(text) = scan_client.request("POST", "/scan/local/stream", Some(body)).await {
                 for line in text.lines() {
                     if let Some(data) = line.strip_prefix("data: ") {
                         let _ = app.emit("scan-progress", data);
@@ -500,10 +505,7 @@ pub async fn start_scan(
         let app = app_handle.clone();
         let scan_client = base_client.clone_connection();
         tokio::spawn(async move {
-            if let Ok(text) = scan_client
-                .request("POST", "/scan/remote/stream", None)
-                .await
-            {
+            if let Ok(text) = scan_client.request("POST", "/scan/remote/stream", None).await {
                 for line in text.lines() {
                     if let Some(data) = line.strip_prefix("data: ") {
                         let _ = app.emit("scan-progress", data);
@@ -526,7 +528,9 @@ pub async fn cancel_scan(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_scan_results(state: State<'_, AppState>) -> Result<Option<ScanResults>, String> {
+pub async fn get_scan_results(
+    state: State<'_, AppState>,
+) -> Result<Option<ScanResults>, String> {
     let client = state.client.lock().await;
     client.get_scan_results().await
 }
