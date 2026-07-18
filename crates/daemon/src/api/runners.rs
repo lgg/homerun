@@ -76,12 +76,37 @@ pub async fn update_runner(
     Path(id): Path<String>,
     Json(req): Json<UpdateRunnerRequest>,
 ) -> Result<Json<RunnerInfo>, (StatusCode, String)> {
-    state
+    let display_name = req.display_name.clone();
+    let mut updated = state
         .runner_manager
         .update(&id, req)
         .await
-        .map(Json)
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+
+    if let Some(value) = display_name {
+        updated = state
+            .runner_manager
+            .update_display_name(&id, value)
+            .await
+            .map_err(|e| {
+                let message = e.to_string();
+                let status = if message == "Runner not found" {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                (status, message)
+            })?;
+    }
+
+    // Persist every PATCH operation. This also fixes labels/mode updates being lost on restart.
+    state
+        .runner_manager
+        .save_to_disk()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(updated))
 }
 
 pub async fn delete_runner(

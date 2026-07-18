@@ -187,9 +187,7 @@ fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String
         return Ok(None);
     }
     if trimmed.chars().count() > MAX_DISPLAY_NAME_CHARS {
-        anyhow::bail!(
-            "Display name must be at most {MAX_DISPLAY_NAME_CHARS} characters"
-        );
+        anyhow::bail!("Display name must be at most {MAX_DISPLAY_NAME_CHARS} characters");
     }
     if trimmed.chars().any(char::is_control) {
         anyhow::bail!("Display name cannot contain control characters");
@@ -263,8 +261,7 @@ mod tests {
         let omitted: UpdateRunnerRequest = serde_json::from_str(r#"{}"#).unwrap();
         assert!(omitted.display_name.is_none());
 
-        let clear: UpdateRunnerRequest =
-            serde_json::from_str(r#"{"display_name":null}"#).unwrap();
+        let clear: UpdateRunnerRequest = serde_json::from_str(r#"{"display_name":null}"#).unwrap();
         assert_eq!(clear.display_name, Some(None));
 
         let set: UpdateRunnerRequest =
@@ -278,7 +275,10 @@ mod tests {
             normalize_display_name(Some("  Office Mac  ".to_string())).unwrap(),
             Some("Office Mac".to_string())
         );
-        assert_eq!(normalize_display_name(Some("   ".to_string())).unwrap(), None);
+        assert_eq!(
+            normalize_display_name(Some("   ".to_string())).unwrap(),
+            None
+        );
         assert_eq!(normalize_display_name(None).unwrap(), None);
         assert!(normalize_display_name(Some("bad\nname".to_string())).is_err());
         assert!(normalize_display_name(Some("x".repeat(101))).is_err());

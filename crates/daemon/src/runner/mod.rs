@@ -1011,6 +1011,7 @@ impl RunnerManager {
             config: RunnerConfig {
                 id: id.clone(),
                 name,
+                display_name: None,
                 repo_owner: owner.to_string(),
                 repo_name: repo.to_string(),
                 labels: resolved_labels,
@@ -2502,6 +2503,7 @@ mod tests {
             config: RunnerConfig {
                 id: "abc".to_string(),
                 name: "test-runner".to_string(),
+                display_name: None,
                 repo_owner: "owner".to_string(),
                 repo_name: "repo".to_string(),
                 labels: vec!["self-hosted".to_string()],
@@ -2552,6 +2554,7 @@ mod tests {
                 crate::runner::types::UpdateRunnerRequest {
                     labels: None,
                     mode: Some(crate::runner::types::RunnerMode::Service),
+                    display_name: None,
                 },
             )
             .await
@@ -2577,6 +2580,7 @@ mod tests {
                 crate::runner::types::UpdateRunnerRequest {
                     labels: Some(vec!["self-hosted".to_string()]),
                     mode: None,
+                    display_name: None,
                 },
             )
             .await;
@@ -2835,6 +2839,7 @@ mod tests {
             config: RunnerConfig {
                 id: "x".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -2870,6 +2875,7 @@ mod tests {
             config: RunnerConfig {
                 id: "x".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -2905,6 +2911,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-1".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -2953,6 +2960,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-1".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -2985,6 +2993,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-1".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3017,6 +3026,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-1".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3051,6 +3061,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-2".to_string(),
                 name: "n2".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3097,6 +3108,7 @@ mod tests {
                 config: RunnerConfig {
                     id: "runner-1".to_string(),
                     name: "n1".to_string(),
+                    display_name: None,
                     repo_owner: "o".to_string(),
                     repo_name: "r".to_string(),
                     labels: vec![],
@@ -3132,6 +3144,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-2".to_string(),
                 name: "n2".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3194,6 +3207,7 @@ mod tests {
                 config: RunnerConfig {
                     id: "runner-1".to_string(),
                     name: "n1".to_string(),
+                    display_name: None,
                     repo_owner: "o".to_string(),
                     repo_name: "r".to_string(),
                     labels: vec![],
@@ -3230,6 +3244,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-1".to_string(),
                 name: "n".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3264,6 +3279,7 @@ mod tests {
             config: RunnerConfig {
                 id: "runner-2".to_string(),
                 name: "n2".to_string(),
+                display_name: None,
                 repo_owner: "o".to_string(),
                 repo_name: "r".to_string(),
                 labels: vec![],
@@ -3309,6 +3325,7 @@ mod tests {
                 config: RunnerConfig {
                     id: "runner-1".to_string(),
                     name: "n1".to_string(),
+                    display_name: None,
                     repo_owner: "o".to_string(),
                     repo_name: "r".to_string(),
                     labels: vec![],
@@ -3543,6 +3560,7 @@ mod tests {
             config: RunnerConfig {
                 id: "abc".to_string(),
                 name: "test-runner".to_string(),
+                display_name: None,
                 repo_owner: "owner".to_string(),
                 repo_name: "repo".to_string(),
                 labels: vec![],
@@ -3591,6 +3609,7 @@ mod tests {
                 config: RunnerConfig {
                     id: runner_id.to_string(),
                     name: "test".to_string(),
+                    display_name: None,
                     repo_owner: "owner".to_string(),
                     repo_name: "repo".to_string(),
                     labels: vec![],
@@ -3740,6 +3759,7 @@ mod tests {
                 config: RunnerConfig {
                     id: runner_id.to_string(),
                     name: "test-runner".to_string(),
+                    display_name: None,
                     repo_owner: "owner".to_string(),
                     repo_name: "repo".to_string(),
                     labels: vec![],
@@ -3796,6 +3816,7 @@ mod tests {
                     config: RunnerConfig {
                         id: id.to_string(),
                         name: name.to_string(),
+                        display_name: None,
                         repo_owner: "owner".to_string(),
                         repo_name: "repo".to_string(),
                         labels: vec![],

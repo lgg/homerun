@@ -46,11 +46,13 @@ export function ActiveRunners({
             key={runner.config.id}
             to={`/runners/${runner.config.id}`}
             className="sidebar-active-entry"
-            title={`${runner.config.name} — ${runner.current_job ?? "Starting..."}`}
+            title={`${runner.config.display_name ?? runner.config.name} — ${runner.current_job ?? "Starting..."}`}
           >
             <span className="sidebar-active-dot" />
             <div className="sidebar-active-info">
-              <span className="sidebar-active-name">{runner.config.name}</span>
+              <span className="sidebar-active-name">
+                {runner.config.display_name ?? runner.config.name}
+              </span>
               <span className="sidebar-active-job">
                 {runner.current_job ?? <em>Starting...</em>}
               </span>
