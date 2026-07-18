@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
+const MAIN_LABEL: &str = "main";
 const MINI_LABEL: &str = "mini";
 const TRAY_PANEL_LABEL: &str = "tray-panel";
+const MAIN_WIDTH: f64 = 1200.0;
+const MAIN_HEIGHT: f64 = 800.0;
+const MAIN_MIN_WIDTH: f64 = 480.0;
+const MAIN_MIN_HEIGHT: f64 = 400.0;
 const MINI_WIDTH: f64 = 280.0;
 const MINI_HEIGHT: f64 = 80.0;
 const TRAY_PANEL_WIDTH: f64 = 300.0;
@@ -19,14 +24,14 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window(MINI_LABEL) {
         if win.is_visible().unwrap_or(false) {
             win.hide().map_err(|e| e.to_string())?;
-            if let Some(main_win) = app.get_webview_window("main") {
+            if let Some(main_win) = app.get_webview_window(MAIN_LABEL) {
                 let _ = main_win.show();
                 let _ = main_win.set_focus();
             }
         } else {
             win.show().map_err(|e| e.to_string())?;
             win.set_focus().map_err(|e| e.to_string())?;
-            if let Some(main_win) = app.get_webview_window("main") {
+            if let Some(main_win) = app.get_webview_window(MAIN_LABEL) {
                 let _ = main_win.hide();
             }
         }
@@ -59,7 +64,7 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
     }
 
     // Hide main window
-    if let Some(main_win) = app.get_webview_window("main") {
+    if let Some(main_win) = app.get_webview_window(MAIN_LABEL) {
         let _ = main_win.hide();
     }
 
@@ -68,7 +73,7 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
 
 /// Hide all windows (main + mini) so only the tray icon remains.
 pub fn hide_all_windows(app: &AppHandle) -> Result<(), String> {
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = app.get_webview_window(MAIN_LABEL) {
         let _ = main.hide();
     }
     if let Some(mini) = app.get_webview_window(MINI_LABEL) {
@@ -80,16 +85,25 @@ pub fn hide_all_windows(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Show and focus the main window, hide the mini window.
+/// Show and focus the main window, recreating it if the user closed it.
 pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
     if let Some(mini) = app.get_webview_window(MINI_LABEL) {
         let _ = mini.hide();
     }
-    if let Some(main) = app.get_webview_window("main") {
-        main.show().map_err(|e| e.to_string())?;
-        main.unminimize().map_err(|e| e.to_string())?;
-        main.set_focus().map_err(|e| e.to_string())?;
-    }
+
+    let main = match app.get_webview_window(MAIN_LABEL) {
+        Some(main) => main,
+        None => WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("/".into()))
+            .title("HomeRun")
+            .inner_size(MAIN_WIDTH, MAIN_HEIGHT)
+            .min_inner_size(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT)
+            .build()
+            .map_err(|e: tauri::Error| e.to_string())?,
+    };
+
+    main.show().map_err(|e| e.to_string())?;
+    main.unminimize().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }
 
