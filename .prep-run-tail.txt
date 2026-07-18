@@ -1,0 +1,250 @@
+2026-07-18T07:41:03.7629302Z [1m[92m   Compiling[0m byteorder v1.5.0
+2026-07-18T07:41:03.9386456Z [1m[92m   Compiling[0m regex-syntax v0.8.11
+2026-07-18T07:41:04.0599615Z [1m[92m   Compiling[0m unic-common v0.9.0
+2026-07-18T07:41:04.1069482Z [1m[92m   Compiling[0m unic-char-range v0.9.0
+2026-07-18T07:41:04.1635916Z [1m[92m   Compiling[0m unic-char-property v0.9.0
+2026-07-18T07:41:04.2189110Z [1m[92m   Compiling[0m unic-ucd-version v0.9.0
+2026-07-18T07:41:04.2489277Z [1m[92m   Compiling[0m derive_more v2.1.1
+2026-07-18T07:41:04.3309481Z [1m[92m   Compiling[0m alloc-stdlib v0.2.4
+2026-07-18T07:41:04.4663591Z [1m[92m    Checking[0m glib v0.18.5
+2026-07-18T07:41:04.5959372Z [1m[92m   Compiling[0m cssparser v0.36.0
+2026-07-18T07:41:05.2294438Z [1m[92m   Compiling[0m markup5ever v0.38.0
+2026-07-18T07:41:05.3129157Z [1m[92m   Compiling[0m url v2.5.8
+2026-07-18T07:41:05.7129756Z [1m[92m   Compiling[0m regex-automata v0.4.16
+2026-07-18T07:41:06.0439069Z [1m[92m   Compiling[0m toml v1.1.3+spec-1.1.0
+2026-07-18T07:41:06.4119458Z [1m[92m   Compiling[0m serde_derive_internals v0.29.1
+2026-07-18T07:41:07.2809239Z [1m[92m   Compiling[0m servo_arc v0.4.3
+2026-07-18T07:41:07.3679258Z [1m[92m   Compiling[0m bit-vec v0.8.0
+2026-07-18T07:41:07.5249483Z [1m[92m   Compiling[0m powerfmt v0.2.0
+2026-07-18T07:41:07.5358903Z [1m[92m   Compiling[0m rustc-hash v2.1.3
+2026-07-18T07:41:07.5872086Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-07-18T07:41:07.6238892Z [1m[92m   Compiling[0m hashbrown v0.12.3
+2026-07-18T07:41:07.6559534Z [1m[92m   Compiling[0m deranged v0.5.8
+2026-07-18T07:41:08.0856757Z [1m[92m   Compiling[0m schemars v0.8.22
+2026-07-18T07:41:08.5679617Z [1m[92m   Compiling[0m regex v1.13.1
+2026-07-18T07:41:08.7684915Z [1m[92m   Compiling[0m time v0.3.53
+2026-07-18T07:41:08.9110752Z [1m[92m   Compiling[0m cfb v0.7.3
+2026-07-18T07:41:09.5860213Z [1m[92m   Compiling[0m bit-set v0.8.0
+2026-07-18T07:41:09.6219744Z [1m[92m   Compiling[0m schemars_derive v0.8.22
+2026-07-18T07:41:09.8949304Z [1m[92m   Compiling[0m html5ever v0.38.0
+2026-07-18T07:41:10.1629596Z [1m[92m   Compiling[0m brotli-decompressor v5.0.3
+2026-07-18T07:41:10.7289197Z [1m[92m   Compiling[0m unic-ucd-ident v0.9.0
+2026-07-18T07:41:10.9579317Z [1m[92m   Compiling[0m jsonptr v0.6.3
+2026-07-18T07:41:11.0209355Z [1m[92m   Compiling[0m gtk-sys v0.18.2
+2026-07-18T07:41:11.0367243Z [1m[92m   Compiling[0m cargo-platform v0.1.9
+2026-07-18T07:41:11.1889524Z [1m[92m   Compiling[0m quick-xml v0.41.0
+2026-07-18T07:41:11.2058497Z [1m[92m   Compiling[0m same-file v1.0.6
+2026-07-18T07:41:11.2128433Z [1m[92m   Compiling[0m dunce v1.0.5
+2026-07-18T07:41:11.2468962Z [1m[92m   Compiling[0m dyn-clone v1.0.20
+2026-07-18T07:41:11.2899311Z [1m[92m   Compiling[0m base64 v0.22.1
+2026-07-18T07:41:11.3069239Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-07-18T07:41:11.3098020Z [1m[92m   Compiling[0m gio v0.18.4
+2026-07-18T07:41:11.4009018Z [1m[92m   Compiling[0m bytes v1.12.1
+2026-07-18T07:41:11.4329046Z [1m[92m   Compiling[0m dom_query v0.27.0
+2026-07-18T07:41:11.9839034Z [1m[92m   Compiling[0m http v1.4.2
+2026-07-18T07:41:12.1189061Z [1m[92m   Compiling[0m plist v1.10.0
+2026-07-18T07:41:12.8909860Z [1m[92m   Compiling[0m walkdir v2.5.0
+2026-07-18T07:41:12.9058737Z [1m[92m   Compiling[0m json-patch v3.0.1
+2026-07-18T07:41:12.9519396Z [1m[92m   Compiling[0m cargo_metadata v0.19.2
+2026-07-18T07:41:13.0329371Z [1m[92m   Compiling[0m urlpattern v0.3.0
+2026-07-18T07:41:13.1169081Z [1m[92m   Compiling[0m brotli v8.0.4
+2026-07-18T07:41:13.3048932Z [1m[92m   Compiling[0m serde-untagged v0.1.9
+2026-07-18T07:41:13.5079010Z [1m[92m   Compiling[0m infer v0.19.0
+2026-07-18T07:41:14.0296628Z [1m[92m   Compiling[0m serde_with v3.21.0
+2026-07-18T07:41:14.3378825Z [1m[92m   Compiling[0m ctor v0.8.0
+2026-07-18T07:41:14.4228877Z [1m[92m   Compiling[0m glob v0.3.3
+2026-07-18T07:41:15.0769560Z [1m[92m   Compiling[0m memoffset v0.9.1
+2026-07-18T07:41:15.2878948Z [1m[92m   Compiling[0m crc32fast v1.5.0
+2026-07-18T07:41:15.8839620Z [1m[92m   Compiling[0m tauri-utils v2.9.3
+2026-07-18T07:41:16.2299421Z [1m[92m    Checking[0m cairo-rs v0.18.5
+2026-07-18T07:41:16.9909469Z [1m[92m   Compiling[0m field-offset v0.3.6
+2026-07-18T07:41:17.0939316Z [1m[92m   Compiling[0m toml_edit v0.19.15
+2026-07-18T07:41:17.5379640Z [1m[92m   Compiling[0m find-msvc-tools v0.1.9
+2026-07-18T07:41:17.7068939Z [1m[92m   Compiling[0m shlex v2.0.1
+2026-07-18T07:41:17.8229229Z [1m[92m   Compiling[0m cc v1.2.67
+2026-07-18T07:41:19.1249177Z [1m[92m   Compiling[0m proc-macro-crate v1.3.1
+2026-07-18T07:41:19.7679075Z [1m[92m    Checking[0m errno v0.3.14
+2026-07-18T07:41:19.8279537Z [1m[92m   Compiling[0m toml_datetime v0.7.5+spec-1.1.0
+2026-07-18T07:41:19.8806723Z [1m[92m   Compiling[0m gtk v0.18.2
+2026-07-18T07:41:20.0310300Z [1m[92m   Compiling[0m option-ext v0.2.0
+2026-07-18T07:41:20.0689274Z [1m[92m   Compiling[0m winnow v0.7.15
+2026-07-18T07:41:20.4968911Z [1m[92m   Compiling[0m dirs-sys v0.5.0
+2026-07-18T07:41:20.7103691Z [1m[92m    Checking[0m signal-hook-registry v1.4.8
+2026-07-18T07:41:20.8662558Z [1m[92m   Compiling[0m gtk3-macros v0.18.2
+2026-07-18T07:41:21.2579123Z [1m[92m   Compiling[0m embed-resource v3.0.11
+2026-07-18T07:41:21.4549069Z [1m[92m    Checking[0m atk v0.18.2
+2026-07-18T07:41:21.7079412Z [1m[92m   Compiling[0m toml v0.9.12+spec-1.1.0
+2026-07-18T07:41:23.0100819Z [1m[92m    Checking[0m parking v2.2.1
+2026-07-18T07:41:23.9999590Z [1m[92m   Compiling[0m cargo_toml v0.22.3
+2026-07-18T07:41:24.2669508Z [1m[92m   Compiling[0m tauri-winres v0.3.6
+2026-07-18T07:41:24.4838985Z [1m[92m    Checking[0m pango v0.18.3
+2026-07-18T07:41:24.5151704Z [1m[92m    Checking[0m gdk-pixbuf v0.18.5
+2026-07-18T07:41:25.0429063Z [1m[92m   Compiling[0m dirs v6.0.0
+2026-07-18T07:41:25.6559442Z [1m[92m    Checking[0m concurrent-queue v2.5.0
+2026-07-18T07:41:25.7749677Z [1m[92m   Compiling[0m javascriptcore-rs-sys v1.1.1
+2026-07-18T07:41:25.8608874Z [1m[92m    Checking[0m gdk v0.18.2
+2026-07-18T07:41:25.9159021Z [1m[92m   Compiling[0m soup3-sys v0.5.0
+2026-07-18T07:41:26.0569105Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-07-18T07:41:26.3618850Z [1m[92m   Compiling[0m tauri-build v2.6.3
+2026-07-18T07:41:27.2079153Z [1m[92m   Compiling[0m webkit2gtk-sys v2.0.2
+2026-07-18T07:41:27.3489053Z [1m[92m   Compiling[0m time-macros v0.2.31
+2026-07-18T07:41:27.7689181Z [1m[92m   Compiling[0m x11 v2.21.0
+2026-07-18T07:41:28.0029055Z [1m[92m   Compiling[0m simd-adler32 v0.3.10
+2026-07-18T07:41:28.4074896Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-07-18T07:41:31.0379183Z [1m[92m   Compiling[0m tauri-plugin v2.6.3
+2026-07-18T07:41:31.2768881Z [1m[92m    Checking[0m dpi v0.1.2
+2026-07-18T07:41:31.3109107Z [1m[92m   Compiling[0m gdkx11-sys v0.18.2
+2026-07-18T07:41:31.7038822Z [1m[92m    Checking[0m bitflags v1.3.2
+2026-07-18T07:41:31.9308868Z [1m[92m   Compiling[0m adler2 v2.0.1
+2026-07-18T07:41:31.9835784Z [1m[92m   Compiling[0m miniz_oxide v0.8.9
+2026-07-18T07:41:32.5349065Z [1m[92m   Compiling[0m tauri v2.11.5
+2026-07-18T07:41:33.2293909Z [1m[92m   Compiling[0m enumflags2_derive v0.7.12
+2026-07-18T07:41:33.6379235Z [1m[92m   Compiling[0m toml_edit v0.25.13+spec-1.1.0
+2026-07-18T07:41:33.7309451Z [1m[92m   Compiling[0m cookie v0.18.1
+2026-07-18T07:41:33.8228930Z [1m[92m   Compiling[0m x11-dl v2.21.0
+2026-07-18T07:41:33.9479737Z [1m[92m   Compiling[0m libdbus-sys v0.2.7
+2026-07-18T07:41:35.3328986Z [1m[92m   Compiling[0m proc-macro-crate v3.5.0
+2026-07-18T07:41:35.6629051Z [1m[92m   Compiling[0m flate2 v1.1.9
+2026-07-18T07:41:36.0079727Z [1m[92m    Checking[0m javascriptcore-rs v1.1.2
+2026-07-18T07:41:36.3319315Z [1m[92m    Checking[0m soup3 v0.5.0
+2026-07-18T07:41:36.5455711Z [1m[92m   Compiling[0m crypto-common v0.1.7
+2026-07-18T07:41:36.5558491Z [1m[92m   Compiling[0m block-buffer v0.10.4
+2026-07-18T07:41:36.6189092Z [1m[92m   Compiling[0m fdeflate v0.3.7
+2026-07-18T07:41:36.6604514Z [1m[92m    Checking[0m event-listener v5.4.1
+2026-07-18T07:41:37.0939285Z [1m[92m    Checking[0m crossbeam-channel v0.5.16
+2026-07-18T07:41:37.1269146Z [1m[92m   Compiling[0m zvariant_utils v3.5.0
+2026-07-18T07:41:37.6949624Z [1m[92m   Compiling[0m num-traits v0.2.19
+2026-07-18T07:41:37.9369030Z [1m[92m    Checking[0m raw-window-handle v0.6.2
+2026-07-18T07:41:38.1173995Z [1m[92m   Compiling[0m rustix v1.1.4
+2026-07-18T07:41:38.1859117Z [1m[92m   Compiling[0m png v0.17.16
+2026-07-18T07:41:38.8480450Z [1m[92m   Compiling[0m zvariant_derive v5.13.1
+2026-07-18T07:41:39.4239366Z [1m[92m    Checking[0m event-listener-strategy v0.5.4
+2026-07-18T07:41:39.4669761Z [1m[92m   Compiling[0m digest v0.10.7
+2026-07-18T07:41:40.5048882Z [1m[92m    Checking[0m futures-lite v2.6.1
+2026-07-18T07:41:42.1369241Z [1m[92m    Checking[0m libloading v0.7.4
+2026-07-18T07:41:42.2049106Z [1m[92m   Compiling[0m dlopen2_derive v0.4.3
+2026-07-18T07:41:42.5989292Z [1m[92m   Compiling[0m tokio-macros v2.7.1
+2026-07-18T07:41:42.7739519Z [1m[92m    Checking[0m mio v1.2.2
+2026-07-18T07:41:43.0069570Z [1m[92m    Checking[0m socket2 v0.6.5
+2026-07-18T07:41:43.0389499Z [1m[92m    Checking[0m unicode-segmentation v1.13.3
+2026-07-18T07:41:43.1099253Z [1m[92m   Compiling[0m tauri-runtime v2.11.3
+2026-07-18T07:41:43.2180602Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+2026-07-18T07:41:43.2519443Z [1m[92m   Compiling[0m wry v0.55.1
+2026-07-18T07:41:43.3765117Z [1m[92m    Checking[0m linux-raw-sys v0.12.1
+2026-07-18T07:41:43.4510893Z [1m[92m    Checking[0m keyboard-types v0.7.0
+2026-07-18T07:41:44.2288735Z [1m[92m   Compiling[0m sha2 v0.10.9
+2026-07-18T07:41:44.5194868Z [1m[92m    Checking[0m tokio v1.53.0
+2026-07-18T07:41:45.6319492Z [1m[92m    Checking[0m webkit2gtk v2.0.2
+2026-07-18T07:41:47.6985267Z [1m[92m    Checking[0m dlopen2 v0.8.2
+2026-07-18T07:41:47.7999533Z [1m[92m    Checking[0m libappindicator-sys v0.9.0
+2026-07-18T07:41:47.8678831Z [1m[92m    Checking[0m png v0.18.1
+2026-07-18T07:41:47.8788886Z [1m[92m    Checking[0m dbus v0.9.12
+2026-07-18T07:41:48.0248945Z [1m[92m   Compiling[0m ico v0.5.0
+2026-07-18T07:41:48.6738905Z [1m[92m    Checking[0m gdkx11 v0.18.2
+2026-07-18T07:41:49.1679490Z [1m[92m    Checking[0m gdkwayland-sys v0.18.2
+2026-07-18T07:41:49.2139244Z [1m[92m   Compiling[0m async-io v2.6.0
+2026-07-18T07:41:49.2349386Z [1m[92m   Compiling[0m tauri-runtime-wry v2.11.4
+2026-07-18T07:41:49.2756980Z [1m[92m    Checking[0m atomic-waker v1.1.2
+2026-07-18T07:41:49.3029404Z [1m[92m    Checking[0m pxfm v0.1.30
+2026-07-18T07:41:49.3154056Z [1m[92m   Compiling[0m getrandom v0.3.4
+2026-07-18T07:41:49.5068813Z [1m[92m    Checking[0m tao v0.35.3
+2026-07-18T07:41:49.7549033Z [1m[92m   Compiling[0m tauri-codegen v2.6.3
+2026-07-18T07:41:50.2589205Z [1m[92m    Checking[0m libappindicator v0.9.0
+2026-07-18T07:41:50.3019178Z [1m[92m    Checking[0m polling v3.11.0
+2026-07-18T07:41:50.3976084Z [1m[92m    Checking[0m muda v0.19.3
+2026-07-18T07:41:50.9809246Z [1m[92m   Compiling[0m enumflags2 v0.7.12
+2026-07-18T07:41:51.1159090Z [1m[92m   Compiling[0m serde_repr v0.1.20
+2026-07-18T07:41:51.3495223Z [1m[92m    Checking[0m moxcms v0.8.1
+2026-07-18T07:41:51.3559297Z [1m[92m   Compiling[0m serialize-to-javascript-impl v0.1.2
+2026-07-18T07:41:51.4279292Z [1m[92m    Checking[0m byteorder-lite v0.1.0
+2026-07-18T07:41:51.6079235Z [1m[92m    Checking[0m bytemuck v1.25.1
+2026-07-18T07:41:51.6138533Z [1m[92m   Compiling[0m signal-hook v0.3.18
+2026-07-18T07:41:51.6919537Z [1m[92m   Compiling[0m endi v1.1.1
+2026-07-18T07:41:51.7873697Z [1m[92m    Checking[0m async-task v4.7.1
+2026-07-18T07:41:51.7958088Z [1m[92m   Compiling[0m zvariant v5.13.1
+2026-07-18T07:41:51.9169199Z [1m[92m    Checking[0m serialize-to-javascript v0.1.2
+2026-07-18T07:41:51.9699031Z [1m[92m   Compiling[0m tauri-macros v2.6.3
+2026-07-18T07:41:52.0345026Z [1m[92m    Checking[0m tray-icon v0.24.1
+2026-07-18T07:41:53.1069400Z [1m[92m    Checking[0m async-channel v2.5.0
+2026-07-18T07:41:53.2269739Z [1m[92m   Compiling[0m tracing-attributes v0.1.31
+2026-07-18T07:41:53.2809147Z [1m[92m    Checking[0m is-docker v0.2.0
+2026-07-18T07:41:53.3113626Z [1m[92m    Checking[0m tracing-core v0.1.36
+2026-07-18T07:41:53.6519421Z [1m[92m    Checking[0m mime v0.3.17
+2026-07-18T07:41:53.7689452Z [1m[92m   Compiling[0m httparse v1.10.1
+2026-07-18T07:41:54.0409039Z [1m[92m   Compiling[0m zbus_names v4.3.4
+2026-07-18T07:41:54.3399224Z [1m[92m    Checking[0m tracing v0.1.44
+2026-07-18T07:41:54.4689260Z [1m[92m    Checking[0m is-wsl v0.4.0
+2026-07-18T07:41:54.5139019Z [1m[92m    Checking[0m async-signal v0.2.14
+2026-07-18T07:41:54.6339396Z [1m[92m    Checking[0m piper v0.2.5
+2026-07-18T07:41:54.6548849Z [1m[92m    Checking[0m image v0.25.10
+2026-07-18T07:41:54.6618785Z [1m[92m    Checking[0m async-lock v3.4.2
+2026-07-18T07:41:54.7059743Z [1m[92m   Compiling[0m tauri-plugin-shell v2.3.5
+2026-07-18T07:41:55.0178209Z [1m[92m   Compiling[0m tauri-plugin-opener v2.5.4
+2026-07-18T07:41:55.2419171Z [1m[92m   Compiling[0m tauri-plugin-positioner v2.3.3
+2026-07-18T07:41:55.5149085Z [1m[92m    Checking[0m http-body v1.1.0
+2026-07-18T07:41:55.5789047Z [1m[92m    Checking[0m os_pipe v1.2.3
+2026-07-18T07:41:55.6139069Z [1m[92m    Checking[0m try-lock v0.2.5
+2026-07-18T07:41:55.6377939Z [1m[92m    Checking[0m sigchld v0.2.4
+2026-07-18T07:41:55.6503864Z [1m[92m    Checking[0m want v0.3.1
+2026-07-18T07:41:55.7073970Z [1m[92m    Checking[0m async-process v2.5.0
+2026-07-18T07:41:55.7169239Z [1m[92m    Checking[0m blocking v1.6.2
+2026-07-18T07:41:55.8219444Z [1m[92m   Compiling[0m zbus_macros v5.18.0
+2026-07-18T07:41:55.8779451Z [1m[92m    Checking[0m open v5.4.0
+2026-07-18T07:41:56.0969388Z [1m[92m    Checking[0m async-executor v1.14.0
+2026-07-18T07:41:56.2229632Z [1m[92m    Checking[0m async-broadcast v0.7.2
+2026-07-18T07:41:56.3689198Z [1m[92m   Compiling[0m async-recursion v1.1.1
+2026-07-18T07:41:56.3999476Z [1m[92m   Compiling[0m async-trait v0.1.89
+2026-07-18T07:41:56.7679759Z [1m[92m    Checking[0m ordered-stream v0.2.0
+2026-07-18T07:41:56.9948913Z [1m[92m    Checking[0m hex v0.4.3
+2026-07-18T07:41:57.1648082Z [1m[92m    Checking[0m tower-service v0.3.3
+2026-07-18T07:41:57.1790940Z [1m[92m    Checking[0m hyper v1.10.1
+2026-07-18T07:41:57.2049626Z [1m[92m    Checking[0m shared_child v1.1.1
+2026-07-18T07:41:57.2749597Z [1m[92m   Compiling[0m homerun-app v0.8.5 (/home/runner/work/homerun/homerun/apps/desktop/src-tauri)
+2026-07-18T07:41:57.7299478Z [1m[92m    Checking[0m dirs-sys v0.4.1
+2026-07-18T07:41:57.7389375Z [1m[92m    Checking[0m encoding_rs v0.8.35
+2026-07-18T07:41:57.7798631Z [1m[92m    Checking[0m tower-layer v0.3.3
+2026-07-18T07:41:57.8823752Z [1m[92m    Checking[0m tower v0.5.3
+2026-07-18T07:41:57.9248795Z [1m[92m    Checking[0m dirs v5.0.1
+2026-07-18T07:41:58.1030675Z [1m[92m    Checking[0m hyper-util v0.1.20
+2026-07-18T07:41:58.4648984Z [1m[92m    Checking[0m zbus v5.18.0
+2026-07-18T07:41:58.6539909Z [1m[92m    Checking[0m http-body-util v0.1.4
+2026-07-18T07:42:03.3494548Z [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 1m 17s
+2026-07-18T07:42:03.3855358Z ##[group]Run git rm .github/workflows/agent-prepare-v0.8.5.yml
+2026-07-18T07:42:03.3855877Z [36;1mgit rm .github/workflows/agent-prepare-v0.8.5.yml[0m
+2026-07-18T07:42:03.3856223Z [36;1mgit add -A[0m
+2026-07-18T07:42:03.3856477Z [36;1mgit config user.name "github-actions[bot]"[0m
+2026-07-18T07:42:03.3856931Z [36;1mgit config user.email "41898282+github-actions[bot]@users.noreply.github.com"[0m
+2026-07-18T07:42:03.3857699Z [36;1mgit commit -m "chore: prepare v0.8.5 release"[0m
+2026-07-18T07:42:03.3858058Z [36;1mgit push origin HEAD:agent/release-v0.8.5[0m
+2026-07-18T07:42:03.3916094Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-07-18T07:42:03.3916438Z env:
+2026-07-18T07:42:03.3916640Z   CARGO_HOME: /home/runner/.cargo
+2026-07-18T07:42:03.3916895Z   CARGO_INCREMENTAL: 0
+2026-07-18T07:42:03.3917119Z   CARGO_TERM_COLOR: always
+2026-07-18T07:42:03.3917597Z ##[endgroup]
+2026-07-18T07:42:03.4332163Z rm '.github/workflows/agent-prepare-v0.8.5.yml'
+2026-07-18T07:42:03.4609382Z [agent/release-v0.8.5 d72519d] chore: prepare v0.8.5 release
+2026-07-18T07:42:03.4609949Z  12 files changed, 497 insertions(+), 1452 deletions(-)
+2026-07-18T07:42:03.4610428Z  delete mode 100644 .github/workflows/agent-prepare-v0.8.5.yml
+2026-07-18T07:42:03.4610890Z  delete mode 100644 .release-inspection.txt
+2026-07-18T07:42:04.3879652Z To https://github.com/lgg/homerun
+2026-07-18T07:42:04.3880771Z  ! [remote rejected] HEAD -> agent/release-v0.8.5 (refusing to allow a GitHub App to create or update workflow `.github/workflows/release-build.yml` without `workflows` permission)
+2026-07-18T07:42:04.3881787Z error: failed to push some refs to 'https://github.com/lgg/homerun'
+2026-07-18T07:42:04.3915360Z ##[error]Process completed with exit code 1.
+2026-07-18T07:42:04.4025482Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-07-18T07:42:04.4026941Z Post job cleanup.
+2026-07-18T07:42:04.4862069Z [command]/usr/bin/git version
+2026-07-18T07:42:04.4919398Z git version 2.54.0
+2026-07-18T07:42:04.4986779Z Temporarily overriding HOME='/home/runner/work/_temp/be0b717f-df95-4748-a1bf-b17cd080fc85' before making global git config changes
+2026-07-18T07:42:04.4988487Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-18T07:42:04.4993909Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/homerun/homerun
+2026-07-18T07:42:04.5034037Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-18T07:42:04.5072847Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-18T07:42:04.5333126Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-18T07:42:04.5364226Z http.https://github.com/.extraheader
+2026-07-18T07:42:04.5378785Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-07-18T07:42:04.5415767Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-18T07:42:04.5694784Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-18T07:42:04.5744112Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-18T07:42:04.6143117Z Cleaning up orphan processes
+2026-07-18T07:42:04.6552529Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
