@@ -33,7 +33,14 @@ jobs:
         run: python .github/scripts/cleanup_display_name_pr.py
 
       - name: Test daemon and TUI workspace
-        run: cargo test --workspace
+        run: cargo test --workspace > cargo-test-clean.log 2>&1
+
+      - name: Upload Rust diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: display-name-clean-rust-log
+          path: cargo-test-clean.log
 
       - name: Install desktop dependencies
         working-directory: apps/desktop
