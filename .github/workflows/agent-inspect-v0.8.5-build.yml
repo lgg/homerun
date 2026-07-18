@@ -1,0 +1,37 @@
+name: Agent inspect v0.8.5 release build
+
+on:
+  push:
+    branches:
+      - agent/inspect-release-prep-run
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-release-prep-run
+      - name: Inspect release build workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-build.yml/runs?branch=agent%2Fbuild-v0.8.5-release&per_page=1")
+          echo "$RUN_JSON" | jq '.workflow_runs[0] | {id,status,conclusion,event,head_sha,html_url,created_at,updated_at}' > .release-build-status.txt
+          RUN_ID=$(echo "$RUN_JSON" | jq -r '.workflow_runs[0].id')
+          if [[ "$RUN_ID" != "null" ]]; then
+            echo >> .release-build-status.txt
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --jq '.jobs[] | {id,name,status,conclusion,steps}' >> .release-build-status.txt
+          fi
+      - name: Commit status and remove workflow
+        run: |
+          git rm .github/workflows/agent-inspect-v0.8.5-build.yml
+          git add .release-build-status.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record v0.8.5 release build status"
+          git push origin HEAD:agent/inspect-release-prep-run
