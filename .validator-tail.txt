@@ -1,0 +1,80 @@
+2026-07-18T07:53:24.6222878Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-07-18T07:53:24.6253483Z ##[group]Checking out the ref
+2026-07-18T07:53:24.6257177Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/3/merge
+2026-07-18T07:53:24.6562678Z Note: switching to 'refs/remotes/pull/3/merge'.
+2026-07-18T07:53:24.6564056Z 
+2026-07-18T07:53:24.6564931Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-07-18T07:53:24.6567654Z changes and commit them, and you can discard any commits you make in this
+2026-07-18T07:53:24.6569623Z state without impacting any branches by switching back to a branch.
+2026-07-18T07:53:24.6570890Z 
+2026-07-18T07:53:24.6571951Z If you want to create a new branch to retain commits you create, you may
+2026-07-18T07:53:24.6573849Z do so (now or later) by using -c with the switch command. Example:
+2026-07-18T07:53:24.6574947Z 
+2026-07-18T07:53:24.6575478Z   git switch -c <new-branch-name>
+2026-07-18T07:53:24.6576698Z 
+2026-07-18T07:53:24.6577569Z Or undo this operation with:
+2026-07-18T07:53:24.6578588Z 
+2026-07-18T07:53:24.6579162Z   git switch -
+2026-07-18T07:53:24.6579898Z 
+2026-07-18T07:53:24.6580931Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-07-18T07:53:24.6582430Z 
+2026-07-18T07:53:24.6584060Z HEAD is now at 99ff9e1 Merge 32afb484a53e640490cb24c2ad4a9b0ac34bc0ae into c15c5d29963f756d2d51219b2842197ace1818a2
+2026-07-18T07:53:24.6590374Z ##[endgroup]
+2026-07-18T07:53:24.6608573Z [command]/usr/bin/git log -1 --format=%H
+2026-07-18T07:53:24.6631543Z 99ff9e18395ef60443b43bd37d781eb69579d4cc
+2026-07-18T07:53:24.6870172Z ##[group]Run go install github.com/rhysd/actionlint/cmd/actionlint@latest
+2026-07-18T07:53:24.6872903Z [36;1mgo install github.com/rhysd/actionlint/cmd/actionlint@latest[0m
+2026-07-18T07:53:24.6932969Z shell: /usr/bin/bash -e {0}
+2026-07-18T07:53:24.6934497Z ##[endgroup]
+2026-07-18T07:53:25.7447795Z go: downloading github.com/rhysd/actionlint v1.7.12
+2026-07-18T07:53:25.8945341Z go: github.com/rhysd/actionlint@v1.7.12 requires go >= 1.25.0; switching to go1.25.12
+2026-07-18T07:53:25.8946677Z go: downloading go1.25.12 (linux/amd64)
+2026-07-18T07:53:29.1846969Z go: downloading github.com/fatih/color v1.19.0
+2026-07-18T07:53:29.1848549Z go: downloading github.com/bmatcuk/doublestar/v4 v4.10.0
+2026-07-18T07:53:29.1857603Z go: downloading github.com/mattn/go-colorable v0.1.14
+2026-07-18T07:53:29.1865484Z go: downloading github.com/mattn/go-runewidth v0.0.21
+2026-07-18T07:53:29.2239738Z go: downloading github.com/mattn/go-shellwords v1.0.12
+2026-07-18T07:53:29.2319595Z go: downloading github.com/robfig/cron/v3 v3.0.1
+2026-07-18T07:53:29.2323478Z go: downloading go.yaml.in/yaml/v4 v4.0.0-rc.3
+2026-07-18T07:53:29.2431307Z go: downloading golang.org/x/sync v0.20.0
+2026-07-18T07:53:29.2728128Z go: downloading golang.org/x/sys v0.42.0
+2026-07-18T07:53:29.2857675Z go: downloading github.com/mattn/go-isatty v0.0.20
+2026-07-18T07:53:29.3965954Z go: downloading github.com/clipperhouse/uax29/v2 v2.7.0
+2026-07-18T07:53:36.5882251Z ##[group]Run "$(go env GOPATH)/bin/actionlint" .github/workflows/release-build.yml
+2026-07-18T07:53:36.5882936Z [36;1m"$(go env GOPATH)/bin/actionlint" .github/workflows/release-build.yml[0m
+2026-07-18T07:53:36.5927047Z shell: /usr/bin/bash -e {0}
+2026-07-18T07:53:36.5927530Z ##[endgroup]
+2026-07-18T07:53:37.3038644Z .github/workflows/release-build.yml:278:9: shellcheck reported issue in this script: SC2086:info:2:48: Double quote to prevent globbing and word splitting [shellcheck]
+2026-07-18T07:53:37.3040080Z     |
+2026-07-18T07:53:37.3040483Z 278 |         run: |
+2026-07-18T07:53:37.3041125Z     |         ^~~~
+2026-07-18T07:53:37.3042317Z .github/workflows/release-build.yml:278:9: shellcheck reported issue in this script: SC2086:info:3:48: Double quote to prevent globbing and word splitting [shellcheck]
+2026-07-18T07:53:37.3043437Z     |
+2026-07-18T07:53:37.3043854Z 278 |         run: |
+2026-07-18T07:53:37.3044316Z     |         ^~~~
+2026-07-18T07:53:37.3045552Z .github/workflows/release-build.yml:278:9: shellcheck reported issue in this script: SC2086:info:4:47: Double quote to prevent globbing and word splitting [shellcheck]
+2026-07-18T07:53:37.3046829Z     |
+2026-07-18T07:53:37.3047234Z 278 |         run: |
+2026-07-18T07:53:37.3047670Z     |         ^~~~
+2026-07-18T07:53:37.3048976Z .github/workflows/release-build.yml:278:9: shellcheck reported issue in this script: SC2086:info:5:47: Double quote to prevent globbing and word splitting [shellcheck]
+2026-07-18T07:53:37.3050035Z     |
+2026-07-18T07:53:37.3050426Z 278 |         run: |
+2026-07-18T07:53:37.3050952Z     |         ^~~~
+2026-07-18T07:53:37.3067475Z ##[error]Process completed with exit code 1.
+2026-07-18T07:53:37.3217055Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-07-18T07:53:37.3218765Z Post job cleanup.
+2026-07-18T07:53:37.4028425Z [command]/usr/bin/git version
+2026-07-18T07:53:37.4072451Z git version 2.54.0
+2026-07-18T07:53:37.4106014Z Temporarily overriding HOME='/home/runner/work/_temp/1d8b4e36-1a23-435e-9612-26d703f3f8f8' before making global git config changes
+2026-07-18T07:53:37.4107762Z Adding repository directory to the temporary git global config as a safe directory
+2026-07-18T07:53:37.4110598Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/homerun/homerun
+2026-07-18T07:53:37.4146380Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-07-18T07:53:37.4179452Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-07-18T07:53:37.4391839Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-07-18T07:53:37.4414909Z http.https://github.com/.extraheader
+2026-07-18T07:53:37.4426715Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-07-18T07:53:37.4456838Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-07-18T07:53:37.4673842Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-07-18T07:53:37.4705263Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-07-18T07:53:37.5048593Z Cleaning up orphan processes
+2026-07-18T07:53:37.5280143Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
