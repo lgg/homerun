@@ -33,6 +33,8 @@ use hyper_util::rt::TokioExecutor;
 pub struct RunnerConfig {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub labels: Vec<String>,

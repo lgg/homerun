@@ -122,7 +122,7 @@ pub struct UpdateRunnerRequest {
     pub labels: Option<Vec<String>>,
     pub mode: Option<RunnerMode>,
     /// Outer `Option` distinguishes an omitted field from an explicit null used to clear the alias.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_display_name_update")]
     pub display_name: Option<Option<String>>,
 }
 
@@ -175,6 +175,15 @@ pub struct ScaleGroupResponse {
     pub added: Vec<RunnerInfo>,
     pub removed: Vec<String>,
     pub skipped_busy: Vec<String>,
+}
+
+fn deserialize_display_name_update<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
 fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String>> {
