@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/release-v0.8.5
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: read
