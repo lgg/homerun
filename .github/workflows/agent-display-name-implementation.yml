@@ -19,6 +19,7 @@ jobs:
       - name: Check out branch
         uses: actions/checkout@v4
         with:
+          ref: agent/display-name-renaming
           fetch-depth: 0
 
       - name: Set up Rust
@@ -34,7 +35,9 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Apply implementation
-        run: python .github/scripts/implement_display_name.py
+        run: |
+          python .github/scripts/implement_display_name.py
+          python .github/scripts/patch_update_requests.py
 
       - name: Format Rust
         run: |
@@ -42,7 +45,14 @@ jobs:
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Test daemon and TUI workspace
-        run: cargo test --workspace
+        run: cargo test --workspace 2>&1 | tee cargo-test.log
+
+      - name: Upload Rust failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-display-name-rust-failure
+          path: cargo-test.log
 
       - name: Install desktop dependencies
         working-directory: apps/desktop
@@ -67,6 +77,7 @@ jobs:
       - name: Remove temporary implementation files
         run: |
           rm .github/scripts/implement_display_name.py
+          rm .github/scripts/patch_update_requests.py
           rm .github/workflows/agent-display-name-implementation.yml
 
       - name: Commit implementation
