@@ -1,0 +1,76 @@
+name: Agent display-name implementation
+
+on:
+  push:
+    branches:
+      - agent/display-name-renaming
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Apply implementation
+        run: python .github/scripts/implement_display_name.py
+
+      - name: Format Rust
+        run: |
+          cargo fmt --all
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Test daemon and TUI workspace
+        run: cargo test --workspace
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Build desktop frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Test desktop frontend
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Check Tauri bridge
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Remove temporary implementation files
+        run: |
+          rm .github/scripts/implement_display_name.py
+          rm .github/workflows/agent-display-name-implementation.yml
+
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: add editable runner display names"
+          git push origin HEAD:agent/display-name-renaming
