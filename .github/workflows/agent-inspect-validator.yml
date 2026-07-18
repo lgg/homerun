@@ -1,0 +1,37 @@
+name: Agent inspect release validator
+
+on:
+  push:
+    branches:
+      - agent/inspect-release-prep-run
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-release-prep-run
+      - name: Inspect validator workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_JSON=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/agent-validate-release-workflow.yml/runs?branch=agent%2Frelease-v0.8.5&per_page=2")
+          echo "$RUN_JSON" | jq '.workflow_runs[] | {id,status,conclusion,event,head_sha,html_url,created_at,updated_at}' > .validator-status.txt
+          RUN_ID=$(echo "$RUN_JSON" | jq -r '.workflow_runs[0].id')
+          if [[ "$RUN_ID" != "null" ]]; then
+            echo >> .validator-status.txt
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" --jq '.jobs[] | {id,name,status,conclusion,steps}' >> .validator-status.txt
+          fi
+      - name: Commit status and remove temporary workflow
+        run: |
+          git rm .github/workflows/agent-inspect-validator.yml
+          git add .validator-status.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: record release validator status"
+          git push origin HEAD:agent/inspect-release-prep-run
