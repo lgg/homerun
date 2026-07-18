@@ -99,7 +99,12 @@ export function MiniView() {
         return (
           <div key={runner.config.id} className="mini-runner-card">
             <div className="mini-runner-top">
-              <span className="mini-runner-name">{runner.config.name}</span>
+              <span
+                className="mini-runner-name"
+                title={runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined}
+              >
+                {runner.config.display_name ?? runner.config.name}
+              </span>
               <span className="mini-runner-time">{formatJobElapsed(runner.job_started_at)}</span>
             </div>
             <div className="mini-runner-job">{runner.current_job ?? "Starting..."}</div>

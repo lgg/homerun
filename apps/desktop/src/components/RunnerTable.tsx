@@ -359,6 +359,8 @@ function RunnerRow({
   onDelete: (id: string) => void;
   onClick: () => void;
 }) {
+  const displayName = runner.config.display_name ?? runner.config.name;
+
   return (
     <div
       className={`runner-row ${indented ? "runner-row-indented" : ""}`}
@@ -388,6 +390,7 @@ function RunnerRow({
             {!indented && runner.config.mode === "service" && <SvcBadge />}
             <span
               className="font-mono"
+              title={runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined}
               style={{
                 fontSize: 14,
                 fontWeight: 500,
@@ -396,19 +399,28 @@ function RunnerRow({
                 whiteSpace: "nowrap",
               }}
             >
-              {runner.config.name}
+              {displayName}
             </span>
           </div>
-          {!inGroup && (
+          {(runner.config.display_name || !inGroup) && (
             <div
               style={{
                 fontSize: 11,
                 color: "var(--text-secondary)",
                 marginTop: 1,
                 paddingLeft: runner.config.mode === "service" ? 32 : 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
-              {runner.config.repo_owner}/{runner.config.repo_name}
+              {runner.config.display_name && <>GitHub: {runner.config.name}</>}
+              {runner.config.display_name && !inGroup && <span> · </span>}
+              {!inGroup && (
+                <>
+                  {runner.config.repo_owner}/{runner.config.repo_name}
+                </>
+              )}
             </div>
           )}
         </div>

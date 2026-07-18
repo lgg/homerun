@@ -50,13 +50,14 @@ export function Dashboard() {
     for (const runner of runners) {
       if (runner.config.group_id) {
         const nameMatch = runner.config.name.toLowerCase().includes(q);
+        const displayNameMatch = runner.config.display_name?.toLowerCase().includes(q) ?? false;
         const repoMatch = `${runner.config.repo_owner}/${runner.config.repo_name}`
           .toLowerCase()
           .includes(q);
         // Also match on group name prefix
         const prefix = runner.config.name.replace(/-\d+$/, "").toLowerCase();
         const prefixMatch = prefix.includes(q);
-        if (nameMatch || repoMatch || prefixMatch) {
+        if (displayNameMatch || nameMatch || repoMatch || prefixMatch) {
           matchingGroupIds.add(runner.config.group_id);
         }
       }
@@ -68,6 +69,7 @@ export function Dashboard() {
       // Include matching solo runners
       if (!r.config.group_id) {
         return (
+          (r.config.display_name?.toLowerCase().includes(q) ?? false) ||
           r.config.name.toLowerCase().includes(q) ||
           `${r.config.repo_owner}/${r.config.repo_name}`.toLowerCase().includes(q)
         );
@@ -83,7 +85,8 @@ export function Dashboard() {
     for (const runner of runners) {
       if (
         runner.config.group_id &&
-        (runner.config.name.toLowerCase().includes(q) ||
+        ((runner.config.display_name?.toLowerCase().includes(q) ?? false) ||
+          runner.config.name.toLowerCase().includes(q) ||
           `${runner.config.repo_owner}/${runner.config.repo_name}`.toLowerCase().includes(q))
       ) {
         forced.add(runner.config.group_id);

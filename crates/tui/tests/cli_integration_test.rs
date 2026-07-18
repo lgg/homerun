@@ -9,6 +9,7 @@ fn make_runner(id: &str, name: &str, state: &str) -> RunnerInfo {
         config: RunnerConfig {
             id: id.to_string(),
             name: name.to_string(),
+            display_name: None,
             repo_owner: "octocat".to_string(),
             repo_name: "hello-world".to_string(),
             labels: vec!["self-hosted".to_string()],

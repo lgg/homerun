@@ -154,6 +154,18 @@ pub async fn create_runner(
     client.create_runner(&req).await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_runner_display_name(
+    state: State<'_, AppState>,
+    id: String,
+    display_name: Option<String>,
+) -> Result<RunnerInfo, String> {
+    let client = state.client.lock().await;
+    client
+        .update_runner_display_name(&id, display_name.as_deref())
+        .await
+}
+
 #[tauri::command]
 pub async fn delete_runner(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let client = state.client.lock().await;

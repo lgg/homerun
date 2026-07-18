@@ -99,7 +99,7 @@ export function TrayPanel() {
                     className="tray-runner-name"
                     style={isOff ? { color: "var(--text-secondary)" } : undefined}
                   >
-                    {runner.config.name}
+                    {runner.config.display_name ?? runner.config.name}
                   </span>
                   {runner.state === "busy" && (
                     <span className="tray-runner-time">

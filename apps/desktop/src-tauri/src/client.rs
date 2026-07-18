@@ -29,6 +29,8 @@ use hyper_util::rt::TokioExecutor;
 pub struct RunnerConfig {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub labels: Vec<String>,
@@ -524,6 +526,18 @@ impl DaemonClient {
                 "/runners",
                 Some(serde_json::to_string(req).map_err(|e| e.to_string())?),
             )
+            .await?;
+        serde_json::from_str(&body).map_err(|e| e.to_string())
+    }
+
+    pub async fn update_runner_display_name(
+        &self,
+        id: &str,
+        display_name: Option<&str>,
+    ) -> Result<RunnerInfo, String> {
+        let payload = serde_json::json!({ "display_name": display_name }).to_string();
+        let body = self
+            .request("PATCH", &format!("/runners/{id}"), Some(payload))
             .await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }

@@ -193,6 +193,7 @@ pub fn run() {
             commands::restart_daemon,
             commands::list_runners,
             commands::create_runner,
+            commands::update_runner_display_name,
             commands::delete_runner,
             commands::start_runner,
             commands::stop_runner,

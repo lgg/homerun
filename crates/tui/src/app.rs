@@ -722,6 +722,7 @@ mod tests {
             config: crate::client::RunnerConfig {
                 id: id.to_string(),
                 name: format!("runner-{id}"),
+                display_name: None,
                 repo_owner: "test".to_string(),
                 repo_name: "repo".to_string(),
                 labels: vec!["self-hosted".to_string()],

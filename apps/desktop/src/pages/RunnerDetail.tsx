@@ -400,7 +400,12 @@ export function RunnerDetail() {
             Runners
           </Link>
           <span className="breadcrumb-sep">›</span>
-          <span className="breadcrumb-current">{config.name}</span>
+          <span
+            className="breadcrumb-current"
+            title={config.display_name ? `GitHub runner: ${config.name}` : undefined}
+          >
+            {config.display_name ?? config.name}
+          </span>
           <span
             title={config.id}
             style={{

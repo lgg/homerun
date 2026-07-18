@@ -1,6 +1,9 @@
 export interface RunnerConfig {
   id: string;
+  /** Technical name registered with GitHub Actions. */
   name: string;
+  /** Optional HomeRun-only alias. */
+  display_name?: string | null;
   repo_owner: string;
   repo_name: string;
   labels: string[];
