@@ -10,117 +10,21 @@ permissions:
   contents: read
   pull-requests: write
 
+# A single project-specific runner executes every HomeRun maintenance workflow.
+# Keep jobs queued instead of cancelling older work when another commit arrives.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: homerun-ci-${{ github.repository }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-  # NOTE: CI runs on self-hosted runners. External contributors will need a
-  # maintainer to approve and run CI on their PRs.
-
 jobs:
-  pre-commit:
-    name: Pre-commit checks
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Add Rust toolchain and Git to PATH
-        run: |
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          TOOLCHAIN_BIN="$(dirname "$(rustup which rustc)")"
-          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
-          # Ensure git.exe is in PATH for pre-commit on Windows
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            echo "/c/Program Files/Git/cmd" >> $GITHUB_PATH
-          fi
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        id: setup-python
-        continue-on-error: true
-        with:
-          python-version: "3.x"
-
-      - name: Fallback Python (Windows)
-        if: steps.setup-python.outcome == 'failure' && runner.os == 'Windows'
-        run: |
-          # setup-python may fail on self-hosted Windows due to registry
-          # permissions.  Search all runner tool caches for a cached Python.
-          for dir in "$HOME/.homerun/runners"/*/_work/_tool/Python/*/x64; do
-            if [[ -x "$dir/python.exe" ]]; then
-              echo "Found Python at $dir"
-              echo "$dir" >> $GITHUB_PATH
-              echo "$dir/Scripts" >> $GITHUB_PATH
-              break
-            fi
-          done
-
-      - name: Install pre-commit
-        run: |
-          # macOS self-hosted runners may only have python3
-          if command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
-            python3 -m pip install pre-commit --quiet --break-system-packages 2>/dev/null \
-              || python3 -m pip install pre-commit --quiet
-          else
-            python -m pip install pre-commit --quiet
-          fi
-
-      - name: Install Node dependencies
-        run: cd apps/desktop && npm ci
-
-      - name: Run pre-commit
-        run: |
-          if command -v pre-commit &>/dev/null; then
-            pre-commit run --all-files --show-diff-on-failure
-          else
-            python3 -m pre_commit run --all-files --show-diff-on-failure
-          fi
-        env:
-          SKIP: no-commit-to-branch,cargo-test,cargo-clippy
-
-  react-test:
-    name: React (test + coverage)
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: bash
-        working-directory: apps/desktop
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests with coverage
-        run: npm run test:coverage
-
-      - name: Upload React coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: react-lcov
-          path: apps/desktop/coverage/lcov.info
-
-  rust:
-    name: Rust (fmt + clippy + test + coverage)
-    needs: [react-test]
-    runs-on: self-hosted
+  quality:
+    name: Full quality gate
+    runs-on: homerun-ci
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -129,48 +33,82 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add Rust toolchain to PATH
+      - name: Verify preinstalled toolchain
         run: |
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          echo "$(dirname "$(rustup which rustc)")" >> $GITHUB_PATH
-
-      - name: Ensure Rust is available
-        run: |
+          set -euo pipefail
+          for tool in git node npm rustc cargo; do
+            command -v "$tool" >/dev/null 2>&1 || {
+              echo "::error::$tool is not installed on the homerun-ci runner"
+              exit 1
+            }
+          done
+          cargo fmt --version >/dev/null 2>&1 || {
+            echo "::error::rustfmt is not installed on the homerun-ci runner"
+            exit 1
+          }
+          cargo clippy --version >/dev/null 2>&1 || {
+            echo "::error::clippy is not installed on the homerun-ci runner"
+            exit 1
+          }
+          cargo llvm-cov --version >/dev/null 2>&1 || {
+            echo "::error::cargo-llvm-cov is not installed on the homerun-ci runner"
+            exit 1
+          }
+          if command -v pre-commit >/dev/null 2>&1; then
+            echo "PRE_COMMIT_COMMAND=pre-commit" >> "$GITHUB_ENV"
+          elif command -v python >/dev/null 2>&1 && python -c "import pre_commit" >/dev/null 2>&1; then
+            echo "PRE_COMMIT_COMMAND=python -m pre_commit" >> "$GITHUB_ENV"
+          elif command -v python3 >/dev/null 2>&1 && python3 -c "import pre_commit" >/dev/null 2>&1; then
+            echo "PRE_COMMIT_COMMAND=python3 -m pre_commit" >> "$GITHUB_ENV"
+          else
+            echo "::error::pre-commit is not installed on the homerun-ci runner"
+            exit 1
+          fi
+          git --version
+          node --version
+          npm --version
           rustc --version
           cargo --version
 
-      - name: Check formatting
+      - name: Install locked frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Run pre-commit checks
+        env:
+          SKIP: no-commit-to-branch,cargo-test,cargo-clippy
+        run: $PRE_COMMIT_COMMAND run --all-files --show-diff-on-failure
+
+      - name: Run React tests with coverage
+        working-directory: apps/desktop
+        run: npm run test:coverage
+
+      - name: Type check
+        working-directory: apps/desktop
+        run: npm exec -- tsc --noEmit
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --quiet 2>/dev/null || true
-
-      - name: Run tests with coverage (daemon)
+      - name: Run daemon tests with coverage
         run: cargo llvm-cov -p homerund --all-features --lcov --output-path daemon-lcov.info
 
-      - name: Run tests with coverage (tui)
+      - name: Run TUI tests with coverage
         run: cargo llvm-cov -p homerun --all-features --lcov --output-path tui-lcov.info
 
-      - name: Clean Rust build artifacts
-        if: always()
-        run: cargo clean
-
-      - name: Download React coverage
-        uses: actions/download-artifact@v4
-        with:
-          name: react-lcov
-          path: react-coverage/
-
-      - name: Merge coverage
+      - name: Merge coverage reports
         run: |
-          # Prefix React lcov paths with apps/desktop/ so they match repo-root-relative paths
-          sed 's|^SF:src/|SF:apps/desktop/src/|' react-coverage/lcov.info > react-lcov-fixed.info
+          sed 's|^SF:src/|SF:apps/desktop/src/|' apps/desktop/coverage/lcov.info > react-lcov-fixed.info
           cat daemon-lcov.info tui-lcov.info react-lcov-fixed.info > lcov.info
 
-      - name: Coverage Report
+      - name: Coverage report
         if: always()
         continue-on-error: true
         uses: aGallea/tests-coverage-report@1.3.14
@@ -183,26 +121,6 @@ jobs:
           min-coverage-percentage: "80"
           fail-under-coverage-percentage: "false"
 
-  typescript:
-    name: TypeScript (type check + build)
-    runs-on: self-hosted
-    defaults:
-      run:
-        shell: bash
-        working-directory: apps/desktop
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type check
-        run: npx tsc --noEmit
-
-      - name: Build
-        run: npm run build
+      - name: Clean Rust build artifacts
+        if: always()
+        run: cargo clean
