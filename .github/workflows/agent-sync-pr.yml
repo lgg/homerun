@@ -83,7 +83,19 @@ jobs:
             librsvg2-dev patchelf libssl-dev build-essential pkg-config
 
       - name: Check Tauri Rust application
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml 2>&1 | tee /tmp/tauri-check.log
+
+      - name: Upload Tauri check diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-check-diagnostic
+          path: /tmp/tauri-check.log
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Commit verified merge and push
         shell: bash
