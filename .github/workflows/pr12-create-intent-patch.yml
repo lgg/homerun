@@ -25,7 +25,9 @@ jobs:
         run: |
           git fetch origin master
           git show origin/master:scripts/pr12_create_intent_patch.py > /tmp/apply.py
+          git show origin/master:scripts/pr12_create_intent_test_fixtures.py > /tmp/fix-tests.py
           python /tmp/apply.py
+          python /tmp/fix-tests.py
           sed -i 's/let mut reserved = Vec::with_capacity/let mut reserved: Vec<String> = Vec::with_capacity/g' crates/daemon/src/api/groups.rs
           cargo fmt --all
           git diff --check
