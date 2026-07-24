@@ -453,6 +453,7 @@ pub async fn delete_group(
 
 #[cfg(test)]
 mod tests {
+    use crate::runner::state::RunnerState;
     use crate::server::{create_router, AppState};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
