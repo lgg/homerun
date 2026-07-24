@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode .github/maintenance/deep-audit.patch.gz.b64 | gzip --decompress > /tmp/audit.patch
+          cat .github/maintenance/deep-audit.patch.part* | base64 --decode | gzip --decompress > /tmp/audit.patch
           if git apply --reverse --check /tmp/audit.patch >/dev/null 2>&1; then
             echo "Audit patch is already applied"
           else
@@ -86,7 +86,19 @@ jobs:
           retention-days: 1
 
       - name: Rust clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee /tmp/cargo-clippy.log
+
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-audit-clippy-diagnostic
+          path: /tmp/cargo-clippy.log
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -119,6 +131,7 @@ jobs:
             apps/desktop/src/components/RunnerTable.tsx \
             crates/daemon/src/api/groups.rs \
             crates/daemon/src/api/runners.rs \
+            crates/daemon/src/api/shutdown.rs \
             crates/daemon/src/runner/mod.rs \
             crates/daemon/src/runner/state.rs \
             crates/daemon/src/runner/types.rs \
