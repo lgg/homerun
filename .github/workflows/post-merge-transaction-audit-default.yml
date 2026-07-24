@@ -28,8 +28,12 @@ jobs:
         shell: bash
         run: |
           set +e
-          python .github/scripts/apply-post-merge-transaction-audit.py > audit-transform.log 2>&1
+          python .github/scripts/repair-post-merge-transformer.py > audit-transform.log 2>&1
           status=$?
+          if [[ $status -eq 0 ]]; then
+            python .github/scripts/apply-post-merge-transaction-audit.py >> audit-transform.log 2>&1
+            status=$?
+          fi
           set -e
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
