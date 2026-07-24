@@ -7,6 +7,7 @@ on:
 concurrency:
   group: homerun-ci-${{ github.repository }}
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_TERM_COLOR: always
