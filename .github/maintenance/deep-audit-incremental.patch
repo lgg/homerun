@@ -1,0 +1,178 @@
+diff --git a/crates/daemon/src/runner/mod.rs b/crates/daemon/src/runner/mod.rs
+index 81d9611..12cdf6e 100644
+--- a/crates/daemon/src/runner/mod.rs
++++ b/crates/daemon/src/runner/mod.rs
+@@ -158,6 +158,16 @@ fn default_container_labels() -> Vec<String> {
+     vec!["self-hosted".to_string(), "docker".to_string()]
+ }
+ 
++pub(crate) fn validate_repo_full_name(repo_full_name: &str) -> Result<()> {
++    let Some((owner, repo)) = repo_full_name.split_once('/') else {
++        bail!("Invalid repo name: expected 'owner/repo'");
++    };
++    if owner.trim().is_empty() || repo.trim().is_empty() || repo.contains('/') {
++        bail!("Invalid repo name: expected non-empty 'owner/repo'");
++    }
++    Ok(())
++}
++
+ impl RunnerManager {
+     pub fn new(config: Config) -> Self {
+         let (log_tx, _) = broadcast::channel(1024);
+@@ -1065,11 +1075,10 @@ impl RunnerManager {
+         group_id: Option<String>,
+         container: Option<types::ContainerConfig>,
+     ) -> Result<RunnerInfo> {
+-        let parts: Vec<&str> = repo_full_name.split('/').collect();
+-        if parts.len() != 2 {
+-            bail!("Invalid repo name: expected 'owner/repo'");
+-        }
+-        let (owner, repo) = (parts[0], parts[1]);
++        validate_repo_full_name(repo_full_name)?;
++        let (owner, repo) = repo_full_name
++            .split_once('/')
++            .expect("validated repository name must contain one slash");
+ 
+         // Container mode needs a real image to run — reject a missing or empty
+         // config here rather than let the start path fall back to native
+@@ -2369,7 +2378,7 @@ impl RunnerManager {
+                 Err(_) => {
+                     bail!("Timed out waiting for runner {id} to exit; refusing to start a duplicate process");
+                 }
+-            }
++            };
+         }
+ 
+         // Handle the case where no process handle existed. Normally the monitor
+@@ -2684,6 +2693,10 @@ mod tests {
+             .await
+             .unwrap();
+         let id = runner.config.id.clone();
++        manager
++            .update_state(&id, RunnerState::Error)
++            .await
++            .unwrap();
+ 
+         manager.delete(&id).await.unwrap();
+         let runners = manager.list().await;
+diff --git a/crates/daemon/src/api/runners.rs b/crates/daemon/src/api/runners.rs
+index d303020..875423a 100644
+--- a/crates/daemon/src/api/runners.rs
++++ b/crates/daemon/src/api/runners.rs
+@@ -17,6 +17,8 @@ pub async fn create_runner(
+     State(state): State<AppState>,
+     Json(req): Json<CreateRunnerRequest>,
+ ) -> Result<(StatusCode, Json<RunnerInfo>), (StatusCode, String)> {
++    crate::runner::validate_repo_full_name(&req.repo_full_name)
++        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+     // Authenticate before mutating local state. Previously an unauthenticated
+     // request returned 401 only after leaving a permanent phantom runner behind.
+     let token = state.auth.token().await.ok_or_else(|| {
+@@ -411,25 +413,17 @@ mod tests {
+     #[tokio::test]
+     async fn test_delete_runner() {
+         let state = AppState::new_test_authenticated();
+-
+-        // Create
+-        let app = create_router(state.clone());
+-        let response = app
+-            .oneshot(
+-                Request::builder()
+-                    .method("POST")
+-                    .uri("/runners")
+-                    .header("content-type", "application/json")
+-                    .body(Body::from(r#"{"repo_full_name":"aGallea/gifted"}"#))
+-                    .unwrap(),
+-            )
++        let runner = state
++            .runner_manager
++            .create("aGallea/gifted", None, None, None, None, None)
+             .await
+             .unwrap();
+-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
++        let id = runner.config.id;
++        state
++            .runner_manager
++            .update_state(&id, crate::runner::state::RunnerState::Error)
+             .await
+             .unwrap();
+-        let runner: serde_json::Value = serde_json::from_slice(&body).unwrap();
+-        let id = runner["config"]["id"].as_str().unwrap();
+ 
+         // Delete
+         let app = create_router(state.clone());
+diff --git a/crates/daemon/src/api/groups.rs b/crates/daemon/src/api/groups.rs
+index 166d197..670718c 100644
+--- a/crates/daemon/src/api/groups.rs
++++ b/crates/daemon/src/api/groups.rs
+@@ -622,23 +622,19 @@ mod tests {
+     #[tokio::test]
+     async fn test_scale_down_removes_runners() {
+         let state = AppState::new_test_authenticated();
+-        let app = create_router(state.clone());
+-        let response = app
+-            .oneshot(
+-                Request::builder()
+-                    .method("POST")
+-                    .uri("/runners/batch")
+-                    .header("content-type", "application/json")
+-                    .body(Body::from(r#"{"repo_full_name":"owner/repo","count":3}"#))
+-                    .unwrap(),
+-            )
+-            .await
+-            .unwrap();
+-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
++        let (group_id, runners, errors) = state
++            .runner_manager
++            .create_batch("owner/repo", 3, None, None, None)
+             .await
+             .unwrap();
+-        let batch: serde_json::Value = serde_json::from_slice(&body).unwrap();
+-        let group_id = batch["group_id"].as_str().unwrap();
++        assert!(errors.is_empty());
++        for runner in runners {
++            state
++                .runner_manager
++                .update_state(&runner.config.id, RunnerState::Error)
++                .await
++                .unwrap();
++        }
+ 
+         let app = create_router(state.clone());
+         let response = app
+@@ -720,24 +716,19 @@ mod tests {
+     #[tokio::test]
+     async fn test_group_delete_removes_runners() {
+         let state = AppState::new_test_authenticated();
+-        // Create batch
+-        let app = create_router(state.clone());
+-        let response = app
+-            .oneshot(
+-                Request::builder()
+-                    .method("POST")
+-                    .uri("/runners/batch")
+-                    .header("content-type", "application/json")
+-                    .body(Body::from(r#"{"repo_full_name":"owner/repo","count":2}"#))
+-                    .unwrap(),
+-            )
+-            .await
+-            .unwrap();
+-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
++        let (group_id, runners, errors) = state
++            .runner_manager
++            .create_batch("owner/repo", 2, None, None, None)
+             .await
+             .unwrap();
+-        let batch: serde_json::Value = serde_json::from_slice(&body).unwrap();
+-        let group_id = batch["group_id"].as_str().unwrap();
++        assert!(errors.is_empty());
++        for runner in runners {
++            state
++                .runner_manager
++                .update_state(&runner.config.id, RunnerState::Error)
++                .await
++                .unwrap();
++        }
+ 
+         // Delete the group
+         let app = create_router(state.clone());
