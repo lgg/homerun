@@ -40,6 +40,78 @@ replace_once(
         let json = std::fs::read_to_string(&path)?;''',
 )
 
+# Reject unusable runner names before any filesystem or manager mutation.
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            bail!("Invalid repo name: expected non-empty 'owner/repo'");
+        }
+
+        if matches!(mode, Some(RunnerMode::Container)) {''',
+    '''        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            bail!("Invalid repo name: expected non-empty 'owner/repo'");
+        }
+
+        if let Some(name) = name {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                bail!("Runner name cannot be empty");
+            }
+            if trimmed.chars().count() > 100 {
+                bail!("Runner name must be at most 100 characters");
+            }
+            if trimmed.chars().any(char::is_control) {
+                bail!("Runner name cannot contain control characters");
+            }
+        }
+
+        if matches!(mode, Some(RunnerMode::Container)) {''',
+)
+
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''            if let Some(name) = name {
+                if !name.chars().all(|character| {''',
+    '''            if let Some(name) = name {
+                if !name.trim().chars().all(|character| {''',
+)
+
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''        let name = match name {
+            Some(n) => n,
+            None => {''',
+    '''        let name = match name {
+            Some(name) => name.trim().to_string(),
+            None => {''',
+)
+
+# Label validation can fail. Do it before creating the per-runner work directory
+# so rejected requests do not leave empty orphan directories behind.
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''        let work_dir = self.config.runners_dir().join(&id);
+        std::fs::create_dir_all(&work_dir)?;
+
+        // Container runners are Linux regardless of host, and need a stable''',
+    '''        // Container runners are Linux regardless of host, and need a stable''',
+)
+
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''            None => platform_defaults,
+        };
+
+        let runner = RunnerInfo {''',
+    '''            None => platform_defaults,
+        };
+
+        let work_dir = self.config.runners_dir().join(&id);
+        std::fs::create_dir_all(&work_dir)?;
+
+        let runner = RunnerInfo {''',
+)
+
 # HashMap::insert replaces before returning the old value. Check first so a
 # defensive collision cannot discard the existing process handle.
 replace_once(
@@ -76,6 +148,42 @@ replace_once(
         }
 
         // 5c. Spawn log reader tasks''',
+)
+
+replace_once(
+    "crates/daemon/src/runner/mod.rs",
+    '''    #[tokio::test]
+    async fn test_concurrent_explicit_name_creation_is_unique() {''',
+    '''    #[tokio::test]
+    async fn test_create_rejects_blank_and_control_character_names() {
+        let manager = create_test_manager();
+        assert!(manager
+            .create(
+                "owner/repo",
+                Some("   ".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_err());
+        assert!(manager
+            .create(
+                "owner/repo",
+                Some("bad\nname".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_err());
+        assert!(manager.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_explicit_name_creation_is_unique() {''',
 )
 
 print("Final post-merge lifecycle hardening applied")
