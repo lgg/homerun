@@ -112,37 +112,43 @@ pub async fn start_group(
         if (runner.state == RunnerState::Offline || runner.state == RunnerState::Error)
             && !state.runner_manager.has_active_process(&id).await
         {
-            let manager = state.runner_manager.clone();
-            let runner_id = id.clone();
-            let token = token.clone();
-            tokio::spawn(async move {
-                if let Err(e) = manager
-                    .update_state(&runner_id, RunnerState::Registering)
-                    .await
-                {
-                    tracing::error!("Failed to transition runner {}: {}", runner_id, e);
-                    return;
+            match state.runner_manager.begin_start_operation(&id).await {
+                Ok(()) => {
+                    let manager = state.runner_manager.clone();
+                    let runner_id = id.clone();
+                    let token = token.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) =
+                            manager.start_existing_reserved(&runner_id, &token).await
+                        {
+                            tracing::error!(
+                                runner = %runner_id,
+                                error = %error,
+                                "Failed to start grouped runner"
+                            );
+                            let _ = manager
+                                .update_state_with_error(
+                                    &runner_id,
+                                    RunnerState::Error,
+                                    Some(format!("{error:#}")),
+                                )
+                                .await;
+                            manager.schedule_recovery(runner_id.clone());
+                        }
+                        manager.finish_start_operation(&runner_id).await;
+                    });
+                    results.push(GroupActionResult {
+                        runner_id: id,
+                        success: true,
+                        error: None,
+                    });
                 }
-                if let Err(e) = manager
-                    .register_and_start_from_registering(&runner_id, &token)
-                    .await
-                {
-                    tracing::error!("Failed to start runner {}: {}", runner_id, e);
-                    let _ = manager
-                        .update_state_with_error(
-                            &runner_id,
-                            RunnerState::Error,
-                            Some(format!("{e:#}")),
-                        )
-                        .await;
-                    manager.schedule_recovery(runner_id);
-                }
-            });
-            results.push(GroupActionResult {
-                runner_id: id,
-                success: true,
-                error: None,
-            });
+                Err(error) => results.push(GroupActionResult {
+                    runner_id: id,
+                    success: false,
+                    error: Some(error.to_string()),
+                }),
+            }
         } else {
             results.push(GroupActionResult {
                 runner_id: id,
@@ -216,16 +222,6 @@ pub async fn restart_group(
         ));
     }
 
-    let results: Vec<GroupActionResult> = runners
-        .iter()
-        .map(|r| GroupActionResult {
-            runner_id: r.config.id.clone(),
-            success: true,
-            error: None,
-        })
-        .collect();
-
-    // Spawn a single background task to stop all then restart all
     let token = state.auth.token().await.ok_or_else(|| {
         (
             StatusCode::UNAUTHORIZED,
@@ -233,56 +229,89 @@ pub async fn restart_group(
         )
     })?;
 
-    let manager = state.runner_manager.clone();
-    let group_id_clone = group_id.clone();
-    tokio::spawn(async move {
-        let runners = manager.list_by_group(&group_id_clone).await;
-        let mut restart_ids = Vec::new();
-
-        // Never launch a replacement if the old process failed to stop.
-        for runner in &runners {
-            if runner.state == RunnerState::Online
-                || runner.state == RunnerState::Busy
-                || manager.has_active_process(&runner.config.id).await
-            {
-                match manager
-                    .stop_process_preserving_intent(&runner.config.id)
-                    .await
-                {
-                    Ok(()) => restart_ids.push(runner.config.id.clone()),
-                    Err(error) => {
-                        tracing::error!(
-                            runner = %runner.config.id,
-                            error = %error,
-                            "Deferring group restart because the old process did not stop"
-                        );
-                        manager.schedule_recovery(runner.config.id.clone());
-                    }
-                }
-            } else if runner.state == RunnerState::Offline || runner.state == RunnerState::Error {
-                restart_ids.push(runner.config.id.clone());
-            }
-        }
-
-        for rid in restart_ids {
-            let mgr = manager.clone();
-            let tok = token.clone();
-            tokio::spawn(async move {
-                if let Err(e) = mgr.update_state(&rid, RunnerState::Registering).await {
-                    tracing::error!("Failed to transition runner {}: {}", rid, e);
-                    mgr.schedule_recovery(rid);
-                    return;
-                }
-                if let Err(e) = mgr.register_and_start_from_registering(&rid, &tok).await {
-                    tracing::error!("Failed to restart runner {}: {}", rid, e);
-                    let _ = mgr
-                        .update_state_with_error(&rid, RunnerState::Error, Some(format!("{e:#}")))
-                        .await;
-                    mgr.schedule_recovery(rid);
-                }
+    let mut results = Vec::new();
+    for runner in &runners {
+        let id = runner.config.id.clone();
+        if !matches!(
+            runner.state,
+            RunnerState::Online | RunnerState::Busy | RunnerState::Offline | RunnerState::Error
+        ) {
+            results.push(GroupActionResult {
+                runner_id: id,
+                success: false,
+                error: Some(format!(
+                    "Runner is in {:?} state, cannot restart",
+                    runner.state
+                )),
             });
+            continue;
         }
-    });
+        if matches!(runner.state, RunnerState::Offline | RunnerState::Error)
+            && state.runner_manager.has_active_process(&id).await
+        {
+            results.push(GroupActionResult {
+                runner_id: id,
+                success: false,
+                error: Some(
+                    "Runner still has an active process and must be stopped before restarting"
+                        .to_string(),
+                ),
+            });
+            continue;
+        }
+
+        match state.runner_manager.begin_start_operation(&id).await {
+            Ok(()) => {
+                let manager = state.runner_manager.clone();
+                let runner_id = id.clone();
+                let token = token.clone();
+                tokio::spawn(async move {
+                    let result = async {
+                        manager.set_desired_running(&runner_id, true).await?;
+                        let current = manager
+                            .get(&runner_id)
+                            .await
+                            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+                        if current.state == RunnerState::Online
+                            || current.state == RunnerState::Busy
+                            || manager.has_active_process(&runner_id).await
+                        {
+                            manager.stop_process_internal(&runner_id, false).await?;
+                        }
+                        manager.start_existing_reserved(&runner_id, &token).await
+                    }
+                    .await;
+
+                    if let Err(error) = result {
+                        tracing::error!(
+                            runner = %runner_id,
+                            error = %error,
+                            "Failed to restart grouped runner"
+                        );
+                        let _ = manager
+                            .update_state_with_error(
+                                &runner_id,
+                                RunnerState::Error,
+                                Some(format!("{error:#}")),
+                            )
+                            .await;
+                        manager.schedule_recovery(runner_id.clone());
+                    }
+                    manager.finish_start_operation(&runner_id).await;
+                });
+                results.push(GroupActionResult {
+                    runner_id: id,
+                    success: true,
+                    error: None,
+                });
+            }
+            Err(error) => results.push(GroupActionResult {
+                runner_id: id,
+                success: false,
+                error: Some(error.to_string()),
+            }),
+        }
+    }
 
     Ok(Json(GroupActionResponse { group_id, results }))
 }
@@ -565,6 +594,58 @@ mod tests {
         let resp: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(resp["group_id"].as_str().unwrap(), group_id);
         assert_eq!(resp["results"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_group_start_and_restart_report_lifecycle_conflicts() {
+        let state = AppState::new_test_authenticated();
+        let group_id = "reserved-group".to_string();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, Some(group_id.clone()), None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+        state
+            .runner_manager
+            .update_state(&id, RunnerState::Error)
+            .await
+            .unwrap();
+        state
+            .runner_manager
+            .begin_stop_operation(&id)
+            .await
+            .unwrap();
+
+        for action in ["start", "restart"] {
+            let app = create_router(state.clone());
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/runners/groups/{group_id}/{action}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(response["results"][0]["success"], false);
+            assert!(response["results"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("stop operation"));
+            assert_eq!(
+                state.runner_manager.get(&id).await.unwrap().state,
+                RunnerState::Error
+            );
+        }
+
+        state.runner_manager.finish_stop_operation(&id).await;
     }
 
     #[tokio::test]

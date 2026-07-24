@@ -1848,25 +1848,6 @@ impl RunnerManager {
         result
     }
 
-    /// Start a runner that is already in the Registering state.
-    /// Used by the start/restart API endpoints.
-    pub async fn register_and_start_from_registering(
-        &self,
-        id: &str,
-        auth_token: &str,
-    ) -> Result<()> {
-        self.begin_start_operation(id).await?;
-
-        let result = async {
-            self.set_desired_running(id, true).await?;
-            self.emit_state_event(id, "registering");
-            self.do_register_and_start(id, auth_token).await
-        }
-        .await;
-        self.finish_start_operation(id).await;
-        result
-    }
-
     /// Start an existing Offline/Error runner while the caller retains the
     /// start reservation. State cannot be exposed as Registering before admission.
     pub(crate) async fn start_existing_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
