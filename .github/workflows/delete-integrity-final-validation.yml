@@ -24,9 +24,9 @@ jobs:
 
           manager_path = Path('crates/daemon/src/runner/mod.rs')
           manager = manager_path.read_text(encoding='utf-8')
-          fn_start = manager.index('    async fn delete_reserved(&self, id: &str) -> Result<()> {')
-          fn_end = manager.index('\n    pub async fn update(', fn_start)
-          block = manager[fn_start:fn_end]
+          start = manager.index('    async fn delete_reserved(&self, id: &str) -> Result<()> {')
+          end = manager.index('\n    pub async fn update(', start)
+          block = manager[start:end]
           guard = '''        self.wait_for_mutations_to_finish(id).await?;
                   let runner = self
                       .get(id)
@@ -39,18 +39,21 @@ jobs:
                   }
           '''
           if 'Authentication required to deregister configured runner' not in block:
-              marker = '    async fn delete_reserved(&self, id: &str) -> Result<()> {\n'
-              block = block.replace(marker, marker + guard, 1)
-          manager = manager[:fn_start] + block + manager[fn_end:]
+              opening = '    async fn delete_reserved(&self, id: &str) -> Result<()> {\n'
+              block = block.replace(opening, opening + guard, 1)
+          manager = manager[:start] + block + manager[end:]
 
-          manager_test = '''    #[tokio::test]
+          if 'test_local_delete_rejects_configured_runner_without_changing_intent' not in manager:
+              marker = '    #[tokio::test]\n    async fn test_full_delete_skips_remote_api_for_unconfigured_runner() {'
+              index = manager.index(marker)
+              test = '''    #[tokio::test]
               async fn test_local_delete_rejects_configured_runner_without_changing_intent() {
                   let manager = create_test_manager();
                   let runner = manager
                       .create("owner/repo", None, None, None, None, None)
                       .await
                       .unwrap();
-                  let id = runner.config.id;
+                  let id = runner.config.id.clone();
                   std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
                   manager.set_desired_running(&id, true).await.unwrap();
 
@@ -62,42 +65,53 @@ jobs:
               }
 
           '''
-          manager_marker = '    #[tokio::test]\n    async fn test_full_delete_skips_remote_api_for_unconfigured_runner() {'
-          if 'test_local_delete_rejects_configured_runner_without_changing_intent' not in manager:
-              manager = manager.replace(manager_marker, manager_test + manager_marker, 1)
+              manager = manager[:index] + test + manager[index:]
           manager_path.write_text(manager, encoding='utf-8')
 
           runners_path = Path('crates/daemon/src/api/runners.rs')
           runners = runners_path.read_text(encoding='utf-8')
-          old_delete = '''    } else {
-              // No auth token: the manager still serializes against registration and
-              // stops any local process before removing its data.
+          start = runners.index('pub async fn delete_runner(')
+          end = runners.index('\npub async fn start_runner(', start)
+          new_function = '''pub async fn delete_runner(
+              State(state): State<AppState>,
+              Path(id): Path<String>,
+          ) -> Result<StatusCode, (StatusCode, String)> {
               state
                   .runner_manager
-                  .delete(&id)
+                  .get(&id)
                   .await
-                  .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-          }
-          '''
-          new_delete = '''    } else {
-              // Unconfigured local records can be removed while signed out. A configured
-              // runner requires authentication so GitHub deregistration cannot be skipped.
-              state.runner_manager.delete(&id).await.map_err(|error| {
-                  let message = error.to_string();
-                  if message.contains("Authentication required") {
-                      (StatusCode::UNAUTHORIZED, message)
-                  } else {
-                      (StatusCode::INTERNAL_SERVER_ERROR, message)
-                  }
-              })?;
-          }
-          '''
-          if old_delete in runners:
-              runners = runners.replace(old_delete, new_delete, 1)
-          elif 'A configured\n    // runner requires authentication' not in runners and 'Authentication required")' not in runners:
-              raise RuntimeError('unexpected single delete API shape')
+                  .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Runner '{id}' not found")))?;
 
-          api_test = '''    #[tokio::test]
+              let token = state.auth.token().await;
+              if let Some(token) = token {
+                  state
+                      .runner_manager
+                      .full_delete(&id, &token)
+                      .await
+                      .map_err(|error| {
+                          (
+                              StatusCode::INTERNAL_SERVER_ERROR,
+                              format!("Failed to delete runner: {error}"),
+                          )
+                      })?;
+              } else {
+                  state.runner_manager.delete(&id).await.map_err(|error| {
+                      let message = error.to_string();
+                      if message.contains("Authentication required") {
+                          (StatusCode::UNAUTHORIZED, message)
+                      } else {
+                          (StatusCode::INTERNAL_SERVER_ERROR, message)
+                      }
+                  })?;
+              }
+              Ok(StatusCode::NO_CONTENT)
+          }
+          '''
+          runners = runners[:start] + new_function + runners[end:]
+          if 'test_delete_configured_runner_requires_authentication' not in runners:
+              marker = '    #[tokio::test]\n    async fn test_get_runner_not_found() {'
+              index = runners.index(marker)
+              test = '''    #[tokio::test]
               async fn test_delete_configured_runner_requires_authentication() {
                   let state = AppState::new_test();
                   let runner = state
@@ -105,7 +119,7 @@ jobs:
                       .create("owner/repo", None, None, None, None, None)
                       .await
                       .unwrap();
-                  let id = runner.config.id;
+                  let id = runner.config.id.clone();
                   std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
 
                   let app = create_router(state.clone());
@@ -125,27 +139,17 @@ jobs:
               }
 
           '''
-          api_marker = '    #[tokio::test]\n    async fn test_get_runner_not_found() {'
-          if 'test_delete_configured_runner_requires_authentication' not in runners:
-              runners = runners.replace(api_marker, api_test + api_marker, 1)
+              runners = runners[:index] + test + runners[index:]
           runners_path.write_text(runners, encoding='utf-8')
 
           groups_path = Path('crates/daemon/src/api/groups.rs')
           groups = groups_path.read_text(encoding='utf-8')
-          old_token = '''    // Scaling up requires authentication and must fail before creating local
-              // runner records. Scaling down can still proceed locally while logged out.
-              let token = if req.count as usize > existing.len() {
-                  Some(state.auth.token().await.ok_or_else(|| {
-                      (
-                          StatusCode::UNAUTHORIZED,
-                          "No auth token available. Please authenticate first.".to_string(),
-                      )
-                  })?)
-              } else {
-                  state.auth.token().await
-              };
-          '''
-          new_token = '''    let token = state.auth.token().await;
+          start = groups.index('pub async fn scale_group(')
+          end = groups.index('\npub async fn delete_group(', start)
+          block = groups[start:end]
+          token_start = block.index('    // Scaling up requires authentication') if '    // Scaling up requires authentication' in block else block.index('    let token = state.auth.token().await;')
+          token_end = block.index('\n\n    let response', token_start)
+          token_logic = '''    let token = state.auth.token().await;
               let scaling_up = req.count as usize > existing.len();
               let scaling_down = req.count as usize < existing.len();
               if scaling_up && token.is_none() {
@@ -170,16 +174,17 @@ jobs:
               if let Some(token) = token.as_ref() {
                   state
                       .runner_manager
-                      .set_auth_token(Some(token.clone()))
+                      .set_auth_token(Some(token.to_string()))
                       .await;
               }
           '''
-          if old_token in groups:
-              groups = groups.replace(old_token, new_token, 1)
-          elif 'Authentication is required to deregister configured runners while scaling down' not in groups:
-              raise RuntimeError('unexpected scale authentication shape')
+          block = block[:token_start] + token_logic + block[token_end:]
+          groups = groups[:start] + block + groups[end:]
 
-          group_test = '''    #[tokio::test]
+          if 'test_scale_down_configured_group_requires_authentication' not in groups:
+              marker = '    #[tokio::test]\n    async fn test_list_runners_filter_by_group_id() {'
+              index = groups.index(marker)
+              test = '''    #[tokio::test]
               async fn test_scale_down_configured_group_requires_authentication() {
                   let state = AppState::new_test();
                   let group_id = "configured-scale-group".to_string();
@@ -217,9 +222,7 @@ jobs:
               }
 
           '''
-          group_marker = '    #[tokio::test]\n    async fn test_list_runners_filter_by_group_id() {'
-          if 'test_scale_down_configured_group_requires_authentication' not in groups:
-              groups = groups.replace(group_marker, group_test + group_marker, 1)
+              groups = groups[:index] + test + groups[index:]
           groups_path.write_text(groups, encoding='utf-8')
           PY
           cargo fmt --all
