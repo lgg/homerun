@@ -16,44 +16,39 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: audit/delete-integrity-and-start-admission-2026-07-24
-      - name: Inspect structural patch boundaries
+          fetch-depth: 0
+      - name: Reproduce patch and formatter result
+        shell: bash
         run: |
-          python - <<'PY' > diagnostic.txt
+          git fetch origin master
+          git show origin/master:.github/workflows/delete-integrity-final-validation.yml > /tmp/final-validation.yml
+          python - <<'PY'
           from pathlib import Path
-
-          checks = {
-              'manager': [
-                  '    async fn delete_reserved(&self, id: &str) -> Result<()> {',
-                  '\n    pub async fn update(',
-                  '    #[tokio::test]\n    async fn test_full_delete_skips_remote_api_for_unconfigured_runner() {',
-              ],
-              'runners': [
-                  'pub async fn delete_runner(',
-                  '\npub async fn start_runner(',
-                  '    #[tokio::test]\n    async fn test_get_runner_not_found() {',
-              ],
-              'groups': [
-                  'pub async fn scale_group(',
-                  '\npub async fn delete_group(',
-                  '    // Scaling up requires authentication',
-                  '\n\n    let response',
-                  '    #[tokio::test]\n    async fn test_list_runners_filter_by_group_id() {',
-              ],
-          }
-          paths = {
-              'manager': Path('crates/daemon/src/runner/mod.rs'),
-              'runners': Path('crates/daemon/src/api/runners.rs'),
-              'groups': Path('crates/daemon/src/api/groups.rs'),
-          }
-          for name, needles in checks.items():
-              text = paths[name].read_text(encoding='utf-8')
-              print(f'[{name}] bytes={len(text)}')
-              for needle in needles:
-                  print(repr(needle), 'count=', text.count(needle), 'index=', text.find(needle))
+          lines = Path('/tmp/final-validation.yml').read_text(encoding='utf-8').splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python - <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          script_lines = []
+          for line in lines[start:end]:
+              script_lines.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/apply.py').write_text('\n'.join(script_lines) + '\n', encoding='utf-8')
           PY
-          cat diagnostic.txt
+          set +e
+          python /tmp/apply.py > patch.log 2>&1
+          echo "$?" > patch.status
+          cargo fmt --all > fmt.log 2>&1
+          echo "$?" > fmt.status
+          git diff > patch.diff
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: delete-auth-boundaries
-          path: diagnostic.txt
+          name: delete-auth-patch-output
+          path: |
+            patch.log
+            patch.status
+            fmt.log
+            fmt.status
+            patch.diff
+            crates/daemon/src/runner/mod.rs
+            crates/daemon/src/api/runners.rs
+            crates/daemon/src/api/groups.rs
           retention-days: 1
