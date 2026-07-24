@@ -1,3 +1,8 @@
+export interface ContainerConfig {
+  image: string;
+  extra_env?: [string, string][];
+}
+
 export interface RunnerConfig {
   id: string;
   /** Technical name registered with GitHub Actions. */
@@ -10,17 +15,11 @@ export interface RunnerConfig {
   mode: string;
   work_dir: string;
   group_id?: string;
+  container?: ContainerConfig;
 }
 
 export type RunnerState =
-  | "creating"
-  | "registering"
-  | "online"
-  | "busy"
-  | "stopping"
-  | "offline"
-  | "error"
-  | "deleting";
+  "creating" | "registering" | "online" | "busy" | "stopping" | "offline" | "error" | "deleting";
 
 export type StepStatus = "pending" | "running" | "succeeded" | "failed" | "skipped" | "cancelled";
 
@@ -70,6 +69,7 @@ export interface RunnerInfo {
   config: RunnerConfig;
   state: RunnerState;
   pid: number | null;
+  container_id?: string | null;
   uptime_secs: number | null;
   jobs_completed: number;
   jobs_failed: number;
@@ -151,6 +151,11 @@ export interface MetricsResponse {
   daemon?: DaemonMetrics;
 }
 
+export interface DockerStatusResponse {
+  available: boolean;
+  error?: string | null;
+}
+
 export interface DaemonLogEntry {
   timestamp: string;
   level: string;
@@ -189,6 +194,7 @@ export interface CreateRunnerRequest {
   name?: string;
   labels?: string[];
   mode?: string;
+  container?: ContainerConfig;
 }
 
 export interface RunnerEvent {
@@ -203,6 +209,7 @@ export interface CreateBatchRequest {
   count: number;
   labels?: string[];
   mode?: string;
+  container?: ContainerConfig;
 }
 
 export interface BatchCreateResponse {

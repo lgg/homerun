@@ -5,7 +5,7 @@ mod window;
 
 use client::DaemonClient;
 use tauri::menu::{AboutMetadata, MenuBuilder, MenuItem, SubmenuBuilder};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 pub struct AppState {
@@ -178,6 +178,10 @@ pub fn run() {
                 let _ = mac_notification_sys::set_application(bundle_id);
             }
 
+            if let Some(main) = app.get_webview_window("main") {
+                window::install_main_window_close_handler(&main);
+            }
+
             // -- Initialize system tray --
             if let Err(e) = tray::init(app) {
                 eprintln!("Failed to initialize tray: {e}");
@@ -205,6 +209,7 @@ pub fn run() {
             commands::poll_device_flow,
             commands::list_repos,
             commands::get_metrics,
+            commands::docker_status,
             commands::service_status,
             commands::install_service,
             commands::uninstall_service,

@@ -2,9 +2,9 @@ use tauri::State;
 
 use crate::client::{
     AuthStatus, BatchCreateResponse, CreateBatchRequest, CreateRunnerRequest, DaemonLogEntry,
-    DeviceFlowResponse, DiscoveredRepo, GroupActionResponse, JobHistoryEntry, LogEntry,
-    MetricsResponse, Preferences, RepoInfo, RunnerInfo, ScanResults, ScaleGroupResponse,
-    StepLogsResponse, StepsResponse,
+    DeviceFlowResponse, DiscoveredRepo, DockerStatusResponse, GroupActionResponse,
+    JobHistoryEntry, LogEntry, MetricsResponse, Preferences, RepoInfo, RunnerInfo, ScanResults,
+    ScaleGroupResponse, StepLogsResponse, StepsResponse,
 };
 use crate::AppState;
 
@@ -221,6 +221,12 @@ pub async fn list_repos(state: State<'_, AppState>) -> Result<Vec<RepoInfo>, Str
 pub async fn get_metrics(state: State<'_, AppState>) -> Result<MetricsResponse, String> {
     let client = state.client.lock().await;
     client.get_metrics().await
+}
+
+#[tauri::command]
+pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatusResponse, String> {
+    let client = state.client.lock().await;
+    client.docker_status().await
 }
 
 #[tauri::command]
@@ -471,6 +477,7 @@ pub async fn get_mini_position(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn quit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
+    crate::window::allow_main_window_close();
     app_handle.exit(0);
     Ok(())
 }
