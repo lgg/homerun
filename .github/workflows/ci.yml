@@ -109,7 +109,7 @@ jobs:
       - name: Merge coverage reports
         run: |
           sed 's|^SF:src/|SF:apps/desktop/src/|' apps/desktop/coverage/lcov.info > react-lcov-fixed.info
-          cat daemon-lcov.info tui-lcov-fixed.info react-lcov-fixed.info > lcov.info
+          cat daemon-lcov.info tui-lcov.info react-lcov-fixed.info > lcov.info
 
       - name: Coverage report
         if: always()
