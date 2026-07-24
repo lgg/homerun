@@ -23,6 +23,18 @@ jobs:
         shell: bash
         run: |
           set +e
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-delete-integrity-audit.py')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('replace_once(\n    "crates/daemon/src/runner/docker.rs",')
+          end = text.index('\n)\n\n# Existing configurations', start) + 3
+          block = text[start:end]
+          if block.count("    '''/// Runs") != 2:
+              raise RuntimeError('unexpected Docker replacement template shape')
+          block = block.replace("    '''/// Runs", "    r'''/// Runs", 2)
+          path.write_text(text[:start] + block + text[end:], encoding='utf-8')
+          PY
           python .github/scripts/apply-delete-integrity-audit.py > patch.log 2>&1
           status=$?
           echo "$status" > patch.status
