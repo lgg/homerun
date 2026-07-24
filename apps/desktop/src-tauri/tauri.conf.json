@@ -1,6 +1,6 @@
 {
   "productName": "HomeRun",
-  "version": "0.8.5",
+  "version": "0.9.1",
   "identifier": "com.homerun.app",
   "build": {
     "frontendDist": "../dist",
@@ -12,6 +12,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
+        "label": "main",
         "title": "HomeRun",
         "width": 1200,
         "height": 800,

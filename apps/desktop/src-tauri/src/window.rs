@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
 const MAIN_LABEL: &str = "main";
@@ -12,6 +13,26 @@ const MINI_WIDTH: f64 = 280.0;
 const MINI_HEIGHT: f64 = 80.0;
 const TRAY_PANEL_WIDTH: f64 = 300.0;
 const TRAY_PANEL_HEIGHT: f64 = 200.0;
+
+static ALLOW_MAIN_CLOSE: AtomicBool = AtomicBool::new(false);
+
+/// Keep the primary webview alive when the user clicks the title-bar X.
+/// Hiding instead of destroying it preserves the UI session and its daemon connections.
+pub fn install_main_window_close_handler(window: &tauri::WebviewWindow) {
+    let main = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if !ALLOW_MAIN_CLOSE.load(Ordering::SeqCst) {
+                api.prevent_close();
+                let _ = main.hide();
+            }
+        }
+    });
+}
+
+pub fn allow_main_window_close() {
+    ALLOW_MAIN_CLOSE.store(true, Ordering::SeqCst);
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MiniPosition {
@@ -93,12 +114,16 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
 
     let main = match app.get_webview_window(MAIN_LABEL) {
         Some(main) => main,
-        None => WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("/".into()))
-            .title("HomeRun")
-            .inner_size(MAIN_WIDTH, MAIN_HEIGHT)
-            .min_inner_size(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT)
-            .build()
-            .map_err(|e: tauri::Error| e.to_string())?,
+        None => {
+            let main = WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("/".into()))
+                .title("HomeRun")
+                .inner_size(MAIN_WIDTH, MAIN_HEIGHT)
+                .min_inner_size(MAIN_MIN_WIDTH, MAIN_MIN_HEIGHT)
+                .build()
+                .map_err(|e: tauri::Error| e.to_string())?;
+            install_main_window_close_handler(&main);
+            main
+        }
     };
 
     main.show().map_err(|e| e.to_string())?;

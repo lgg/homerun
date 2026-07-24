@@ -7,6 +7,7 @@ import { api } from "../api/commands";
 import type { LogEntry } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { JobProgress } from "../components/JobProgress";
+import { DockerBadge } from "../components/DockerBadge";
 import { useJobSteps } from "../hooks/useJobSteps";
 import { useJobHistory } from "../hooks/useJobHistory";
 
@@ -406,6 +407,7 @@ export function RunnerDetail() {
           >
             {config.display_name ?? config.name}
           </span>
+          {config.mode === "container" && <DockerBadge />}
           <span
             title={config.id}
             style={{

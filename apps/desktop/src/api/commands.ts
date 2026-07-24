@@ -6,6 +6,7 @@ import type {
   DaemonLogEntry,
   DeviceFlowResponse,
   DiscoveredRepo,
+  DockerStatusResponse,
   GroupActionResponse,
   JobHistoryEntry,
   LogEntry,
@@ -59,6 +60,9 @@ export const api = {
 
   // Metrics
   getMetrics: () => invoke<MetricsResponse>("get_metrics"),
+
+  // System
+  getDockerStatus: () => invoke<DockerStatusResponse>("docker_status"),
 
   // Logs
   getRunnerLogs: (runnerId: string) =>
