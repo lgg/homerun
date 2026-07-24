@@ -31,3 +31,5 @@ jobs:
           git add crates/daemon/src/github/mod.rs crates/daemon/src/runner/mod.rs crates/daemon/src/runner/process.rs crates/daemon/src/runner/docker.rs crates/daemon/src/api/runners.rs crates/daemon/src/api/groups.rs
           git commit -m "fix: make deletion and start admission failure-safe"
           git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
+
+# trigger: 2026-07-24T16:37:00Z
