@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: homerun-ci
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 30
     defaults:
       run:

@@ -15,7 +15,7 @@ env:
 jobs:
   update-badge:
     name: Update coverage badge
-    runs-on: homerun-ci
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 60
     defaults:
       run:

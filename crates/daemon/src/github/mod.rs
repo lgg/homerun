@@ -158,6 +158,26 @@ impl GitHubClient {
         })
     }
 
+    pub async fn get_runner_remove_token(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<RunnerRegistration> {
+        #[derive(Deserialize)]
+        struct RemoveTokenResponse {
+            token: String,
+            expires_at: String,
+        }
+
+        let route = format!("/repos/{owner}/{repo}/actions/runners/remove-token");
+        let response: RemoveTokenResponse = self.octocrab.post(route, None::<&()>).await?;
+
+        Ok(RunnerRegistration {
+            token: response.token,
+            expires_at: response.expires_at,
+        })
+    }
+
     /// Find the in-progress workflow run that matches this runner.
     ///
     /// Matches by job name (from runner stdout) against the GitHub API's job

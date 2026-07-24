@@ -113,18 +113,27 @@ pub fn clean_runner_config(runner_dir: &Path) {
 
 pub async fn remove_runner(runner_dir: &Path, token: &str) -> Result<()> {
     let script = config_script();
-    let status = Command::new(runner_dir.join(&script))
+    let output = Command::new(runner_dir.join(&script))
         .args(["remove", "--token", token])
         .current_dir(runner_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .status()
+        .output()
         .await?;
 
-    if !status.success() {
-        tracing::warn!(
-            "{} remove failed — runner may need manual cleanup on GitHub",
-            script
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if !stderr.trim().is_empty() {
+            stderr.trim()
+        } else {
+            stdout.trim()
+        };
+        anyhow::bail!(
+            "{} remove failed (exit {}): {}",
+            script,
+            output.status.code().unwrap_or(-1),
+            detail
         );
     }
     Ok(())
@@ -171,11 +180,9 @@ mod tests {
     async fn test_remove_runner_fails_without_config_script() {
         let dir = tempfile::tempdir().unwrap();
         let result = remove_runner(dir.path(), "fake-token").await;
-        // On Unix, spawn fails because the script doesn't exist.
-        // On Windows, the command may run but exit with failure.
-        // Both are acceptable — the function handles non-success exits.
-        // Just verify it doesn't panic.
-        let _ = result;
+        // On Unix, spawning the missing script fails. On Windows, cmd.exe may
+        // start but must still return a non-success status. Both must surface.
+        assert!(result.is_err());
     }
 
     #[test]

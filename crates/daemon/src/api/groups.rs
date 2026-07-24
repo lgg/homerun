@@ -51,13 +51,42 @@ pub async fn create_batch(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Spawn background registration for each runner.
+    // Creation persisted desired-running intent atomically. Reserve every start
+    // before spawning any work so the batch response cannot publish unadmitted runners.
+    let mut reserved: Vec<String> = Vec::with_capacity(runners.len());
     for runner in &runners {
-        let manager = state.runner_manager.clone();
         let runner_id = runner.config.id.clone();
+        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+            for reserved_id in &reserved {
+                state
+                    .runner_manager
+                    .finish_start_operation(reserved_id)
+                    .await;
+            }
+            let mut cleanup_errors = Vec::new();
+            for created in &runners {
+                if let Err(cleanup) = state.runner_manager.delete(&created.config.id).await {
+                    cleanup_errors.push(format!("{}: {cleanup}", created.config.id));
+                }
+            }
+            let cleanup_detail = if cleanup_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; cleanup failures: {}", cleanup_errors.join(", "))
+            };
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to admit batch runner start: {error}{cleanup_detail}"),
+            ));
+        }
+        reserved.push(runner_id);
+    }
+
+    for runner_id in reserved {
+        let manager = state.runner_manager.clone();
         let token = token.clone();
         tokio::spawn(async move {
-            if let Err(e) = manager.register_and_start(&runner_id, &token).await {
+            if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
                 tracing::error!("Failed to register runner {}: {}", runner_id, e);
                 let _ = manager
                     .update_state_with_error(
@@ -66,8 +95,9 @@ pub async fn create_batch(
                         Some(format!("{e:#}")),
                     )
                     .await;
-                manager.schedule_recovery(runner_id);
+                manager.schedule_recovery(runner_id.clone());
             }
+            manager.finish_start_operation(&runner_id).await;
         });
     }
 
@@ -113,36 +143,46 @@ pub async fn start_group(
             && !state.runner_manager.has_active_process(&id).await
         {
             match state.runner_manager.begin_start_operation(&id).await {
-                Ok(()) => {
-                    let manager = state.runner_manager.clone();
-                    let runner_id = id.clone();
-                    let token = token.clone();
-                    tokio::spawn(async move {
-                        if let Err(error) =
-                            manager.start_existing_reserved(&runner_id, &token).await
-                        {
-                            tracing::error!(
-                                runner = %runner_id,
-                                error = %error,
-                                "Failed to start grouped runner"
-                            );
-                            let _ = manager
-                                .update_state_with_error(
-                                    &runner_id,
-                                    RunnerState::Error,
-                                    Some(format!("{error:#}")),
-                                )
-                                .await;
-                            manager.schedule_recovery(runner_id.clone());
-                        }
-                        manager.finish_start_operation(&runner_id).await;
-                    });
-                    results.push(GroupActionResult {
-                        runner_id: id,
-                        success: true,
-                        error: None,
-                    });
-                }
+                Ok(()) => match state.runner_manager.set_desired_running(&id, true).await {
+                    Ok(()) => {
+                        let manager = state.runner_manager.clone();
+                        let runner_id = id.clone();
+                        let token = token.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) =
+                                manager.start_existing_reserved(&runner_id, &token).await
+                            {
+                                tracing::error!(
+                                    runner = %runner_id,
+                                    error = %error,
+                                    "Failed to start grouped runner"
+                                );
+                                let _ = manager
+                                    .update_state_with_error(
+                                        &runner_id,
+                                        RunnerState::Error,
+                                        Some(format!("{error:#}")),
+                                    )
+                                    .await;
+                                manager.schedule_recovery(runner_id.clone());
+                            }
+                            manager.finish_start_operation(&runner_id).await;
+                        });
+                        results.push(GroupActionResult {
+                            runner_id: id,
+                            success: true,
+                            error: None,
+                        });
+                    }
+                    Err(error) => {
+                        state.runner_manager.finish_start_operation(&id).await;
+                        results.push(GroupActionResult {
+                            runner_id: id,
+                            success: false,
+                            error: Some(format!("Failed to persist start intent: {error}")),
+                        });
+                    }
+                },
                 Err(error) => results.push(GroupActionResult {
                     runner_id: id,
                     success: false,
@@ -261,50 +301,59 @@ pub async fn restart_group(
         }
 
         match state.runner_manager.begin_start_operation(&id).await {
-            Ok(()) => {
-                let manager = state.runner_manager.clone();
-                let runner_id = id.clone();
-                let token = token.clone();
-                tokio::spawn(async move {
-                    let result = async {
-                        manager.set_desired_running(&runner_id, true).await?;
-                        let current = manager
-                            .get(&runner_id)
-                            .await
-                            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-                        if current.state == RunnerState::Online
-                            || current.state == RunnerState::Busy
-                            || manager.has_active_process(&runner_id).await
-                        {
-                            manager.stop_process_internal(&runner_id, false).await?;
+            Ok(()) => match state.runner_manager.set_desired_running(&id, true).await {
+                Ok(()) => {
+                    let manager = state.runner_manager.clone();
+                    let runner_id = id.clone();
+                    let token = token.clone();
+                    tokio::spawn(async move {
+                        let result = async {
+                            let current = manager
+                                .get(&runner_id)
+                                .await
+                                .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+                            if current.state == RunnerState::Online
+                                || current.state == RunnerState::Busy
+                                || manager.has_active_process(&runner_id).await
+                            {
+                                manager.stop_process_internal(&runner_id, false).await?;
+                            }
+                            manager.start_existing_reserved(&runner_id, &token).await
                         }
-                        manager.start_existing_reserved(&runner_id, &token).await
-                    }
-                    .await;
+                        .await;
 
-                    if let Err(error) = result {
-                        tracing::error!(
-                            runner = %runner_id,
-                            error = %error,
-                            "Failed to restart grouped runner"
-                        );
-                        let _ = manager
-                            .update_state_with_error(
-                                &runner_id,
-                                RunnerState::Error,
-                                Some(format!("{error:#}")),
-                            )
-                            .await;
-                        manager.schedule_recovery(runner_id.clone());
-                    }
-                    manager.finish_start_operation(&runner_id).await;
-                });
-                results.push(GroupActionResult {
-                    runner_id: id,
-                    success: true,
-                    error: None,
-                });
-            }
+                        if let Err(error) = result {
+                            tracing::error!(
+                                runner = %runner_id,
+                                error = %error,
+                                "Failed to restart grouped runner"
+                            );
+                            let _ = manager
+                                .update_state_with_error(
+                                    &runner_id,
+                                    RunnerState::Error,
+                                    Some(format!("{error:#}")),
+                                )
+                                .await;
+                            manager.schedule_recovery(runner_id.clone());
+                        }
+                        manager.finish_start_operation(&runner_id).await;
+                    });
+                    results.push(GroupActionResult {
+                        runner_id: id,
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    state.runner_manager.finish_start_operation(&id).await;
+                    results.push(GroupActionResult {
+                        runner_id: id,
+                        success: false,
+                        error: Some(format!("Failed to persist restart intent: {error}")),
+                    });
+                }
+            },
             Err(error) => results.push(GroupActionResult {
                 runner_id: id,
                 success: false,
@@ -336,18 +385,34 @@ pub async fn scale_group(
         ));
     }
 
-    // Scaling up requires authentication and must fail before creating local
-    // runner records. Scaling down can still proceed locally while logged out.
-    let token = if req.count as usize > existing.len() {
-        Some(state.auth.token().await.ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                "No auth token available. Please authenticate first.".to_string(),
-            )
-        })?)
-    } else {
-        state.auth.token().await
-    };
+    let token = state.auth.token().await;
+    let scaling_up = req.count as usize > existing.len();
+    let scaling_down = (req.count as usize) < existing.len();
+    if scaling_up && token.is_none() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "No auth token available. Please authenticate first.".to_string(),
+        ));
+    }
+    if scaling_down
+        && token.is_none()
+        && existing.iter().any(|runner| {
+            runner.config.work_dir.join(".runner").exists()
+                || runner.config.work_dir.join(".runner_migrated").exists()
+        })
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Authentication is required to deregister configured runners while scaling down"
+                .to_string(),
+        ));
+    }
+    if let Some(token) = token.as_ref() {
+        state
+            .runner_manager
+            .set_auth_token(Some(token.to_string()))
+            .await;
+    }
 
     let response = state
         .runner_manager
@@ -355,16 +420,44 @@ pub async fn scale_group(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Spawn registration for added runners. The precondition above guarantees
-    // a token whenever additions are possible.
+    // Scale-up creation persisted intent atomically. Reserve every new runner
+    // before spawning any of them so the returned count is fully admitted.
+    let mut reserved: Vec<String> = Vec::with_capacity(response.added.len());
     for runner in &response.added {
-        let manager = state.runner_manager.clone();
         let runner_id = runner.config.id.clone();
+        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+            for reserved_id in &reserved {
+                state
+                    .runner_manager
+                    .finish_start_operation(reserved_id)
+                    .await;
+            }
+            let mut cleanup_errors = Vec::new();
+            for added in &response.added {
+                if let Err(cleanup) = state.runner_manager.delete(&added.config.id).await {
+                    cleanup_errors.push(format!("{}: {cleanup}", added.config.id));
+                }
+            }
+            let cleanup_detail = if cleanup_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; cleanup failures: {}", cleanup_errors.join(", "))
+            };
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to admit scaled runner start: {error}{cleanup_detail}"),
+            ));
+        }
+        reserved.push(runner_id);
+    }
+
+    for runner_id in reserved {
+        let manager = state.runner_manager.clone();
         let token = token
             .clone()
             .expect("scale-up token checked before mutation");
         tokio::spawn(async move {
-            if let Err(e) = manager.register_and_start(&runner_id, &token).await {
+            if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
                 tracing::error!("Failed to register runner {}: {}", runner_id, e);
                 let _ = manager
                     .update_state_with_error(
@@ -373,8 +466,9 @@ pub async fn scale_group(
                         Some(format!("{e:#}")),
                     )
                     .await;
-                manager.schedule_recovery(runner_id);
+                manager.schedule_recovery(runner_id.clone());
             }
+            manager.finish_start_operation(&runner_id).await;
         });
     }
 
@@ -422,8 +516,8 @@ pub async fn delete_group(
             let result = if let Some(ref token) = token {
                 manager.full_delete(&runner_id, token).await
             } else {
-                // Local deletion still waits for registration and stops any
-                // process safely; it simply cannot deregister from GitHub.
+                // Local deletion is allowed only for runners that were never
+                // configured; configured runners return a per-runner auth error.
                 manager.delete(&runner_id).await
             };
             (runner_id, result)
@@ -750,6 +844,36 @@ mod tests {
         assert_eq!(resp["previous_count"].as_u64().unwrap(), 3);
         assert_eq!(resp["actual_count"].as_u64().unwrap(), 1);
         assert_eq!(resp["removed"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_scale_down_configured_group_requires_authentication() {
+        let state = AppState::new_test();
+        let group_id = "configured-scale-group".to_string();
+        for _ in 0..2 {
+            let runner = state
+                .runner_manager
+                .create("owner/repo", None, None, None, Some(group_id.clone()), None)
+                .await
+                .unwrap();
+            std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+        }
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/runners/groups/{group_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"count":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(state.runner_manager.list_by_group(&group_id).await.len(), 2);
     }
 
     #[tokio::test]
