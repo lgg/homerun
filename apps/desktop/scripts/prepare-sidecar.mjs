@@ -29,9 +29,7 @@ function run(command, args, options = {}) {
 const rustcOutput = run(isWindows ? "rustc.exe" : "rustc", ["-vV"], {
   capture: true,
 });
-const hostLine = rustcOutput
-  .split(/\r?\n/)
-  .find((line) => line.startsWith("host: "));
+const hostLine = rustcOutput.split(/\r?\n/).find((line) => line.startsWith("host: "));
 if (!hostLine) {
   throw new Error("Unable to determine the Rust host target from `rustc -vV`");
 }
@@ -44,10 +42,7 @@ run(isWindows ? "cargo.exe" : "cargo", ["build", "-p", "homerund"]);
 
 const source = join(repoRoot, "target", "debug", `homerund${executableSuffix}`);
 const destinationDir = join(repoRoot, "apps", "desktop", "src-tauri", "binaries");
-const destination = join(
-  destinationDir,
-  `homerund-${hostTarget}${executableSuffix}`,
-);
+const destination = join(destinationDir, `homerund-${hostTarget}${executableSuffix}`);
 mkdirSync(destinationDir, { recursive: true });
 copyFileSync(source, destination);
 if (!isWindows) {
