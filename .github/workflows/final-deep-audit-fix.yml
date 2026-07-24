@@ -23,7 +23,7 @@ jobs:
           components: rustfmt
 
       - name: Apply reviewed corrections
-        run: python .github/scripts/apply-final-deep-audit-stage2.py
+        run: python .github/scripts/apply-final-deep-audit-stage3.py
 
       - name: Format Rust source
         run: cargo fmt --all
@@ -33,9 +33,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/daemon/src/runner/mod.rs
+          git add apps/desktop/src/components/NewRunnerWizard.tsx apps/desktop/src/components/NewRunnerWizard.test.tsx
           git diff --cached --check
-          git commit -m "fix: serialize runner lifecycle mutations"
+          git commit -m "fix: retry stale wizard repository preselection"
 
       - name: Push staged audit result
         run: git push origin HEAD:agent/final-deep-audit-2026-07-24
