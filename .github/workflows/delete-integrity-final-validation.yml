@@ -23,55 +23,40 @@ jobs:
           from pathlib import Path
           path = Path('crates/daemon/src/runner/mod.rs')
           text = path.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  '''    async fn delete_reserved(&self, id: &str) -> Result<()> {
-                      self.prepare_delete_reserved(id).await?;
-                      self.emit_state_event(id, "deleting");
-                      self.remove_reserved(id).await
-                  }
-                  ''',
-                  '''    async fn delete_reserved(&self, id: &str) -> Result<()> {
-                      self.prepare_delete_reserved(id).await?;
-                      self.remove_reserved(id).await?;
-                      self.emit_state_event(id, "deleting");
-                      Ok(())
-                  }
-                  ''',
-              ),
-              (
-                  '''        let runner = self
-                      .get(id)
-                      .await
-                      .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-                  self.emit_state_event(id, "deleting");
 
-                  // Only configured runners have a GitHub registration to remove. Use the
-                  ''',
-                  '''        let runner = self
-                      .get(id)
-                      .await
-                      .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-
-                  // Only configured runners have a GitHub registration to remove. Use the
-                  ''',
-              ),
-              (
-                  '''        self.remove_reserved(id).await
-              }
-              ''',
-                  '''        self.remove_reserved(id).await?;
+          local_old = '''        self.emit_state_event(id, "deleting");
+                  self.remove_reserved(id).await
+          '''
+          local_new = '''        self.remove_reserved(id).await?;
                   self.emit_state_event(id, "deleting");
                   Ok(())
-              }
-              ''',
-              ),
-          ]
-          for old, new in replacements:
-              if old in text:
-                  text = text.replace(old, new, 1)
-              elif new not in text:
-                  raise RuntimeError('unexpected deletion flow shape')
+          '''
+          local_start = text.index('    async fn delete_reserved(&self, id: &str) -> Result<()> {')
+          local_end = text.index('\n    pub async fn update(', local_start)
+          local_block = text[local_start:local_end]
+          if local_old in local_block:
+              local_block = local_block.replace(local_old, local_new, 1)
+          elif local_new not in local_block:
+              raise RuntimeError('unexpected local delete shape')
+          text = text[:local_start] + local_block + text[local_end:]
+
+          full_start = text.index('    async fn full_delete_reserved(&self, id: &str, auth_token: &str) -> Result<()> {')
+          full_end = text.index('\n    fn emit_state_event(', full_start)
+          full_block = text[full_start:full_end]
+          early_event = '        self.emit_state_event(id, "deleting");\n\n'
+          if early_event in full_block:
+              full_block = full_block.replace(early_event, '', 1)
+          full_old = '        self.remove_reserved(id).await\n'
+          full_new = '''        self.remove_reserved(id).await?;
+                  self.emit_state_event(id, "deleting");
+                  Ok(())
+          '''
+          if full_old in full_block:
+              full_block = full_block.replace(full_old, full_new, 1)
+          elif full_new not in full_block:
+              raise RuntimeError('unexpected full delete completion shape')
+          text = text[:full_start] + full_block + text[full_end:]
+
           path.write_text(text, encoding='utf-8')
           trigger = Path('.github/delete-integrity-review-trigger')
           if trigger.exists():
@@ -87,7 +72,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/daemon/src/runner/mod.rs .github/delete-integrity-review-trigger
+          git add -A crates/daemon/src/runner/mod.rs .github/delete-integrity-review-trigger
           git commit -m "fix: publish deletion event only after durable removal"
           git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
 
