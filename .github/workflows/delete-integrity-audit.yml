@@ -1,0 +1,33 @@
+name: Delete Integrity Audit Patch
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/delete-integrity-audit.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/delete-integrity-and-start-admission-2026-07-24
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply deterministic audit patch
+        run: python .github/scripts/apply-delete-integrity-audit.py
+      - name: Format and verify patch
+        run: |
+          cargo fmt --all
+          git diff --check
+      - name: Commit production changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/daemon/src/github/mod.rs crates/daemon/src/runner/mod.rs crates/daemon/src/runner/process.rs crates/daemon/src/runner/docker.rs crates/daemon/src/api/runners.rs crates/daemon/src/api/groups.rs
+          git commit -m "fix: make deletion and start admission failure-safe"
+          git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
