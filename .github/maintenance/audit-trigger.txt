@@ -1,1 +1,1 @@
-Trigger hosted validation after adding the post-merge audit workflow.
+Trigger final hosted validation for committed post-merge audit source.
