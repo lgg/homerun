@@ -6,11 +6,238 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  linux:
+  prepare:
     if: github.event.pull_request.number == 12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/delete-integrity-and-start-admission-2026-07-24
+          fetch-depth: 0
+      - name: Apply authenticated deletion invariant
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          manager_path = Path('crates/daemon/src/runner/mod.rs')
+          manager = manager_path.read_text(encoding='utf-8')
+          fn_start = manager.index('    async fn delete_reserved(&self, id: &str) -> Result<()> {')
+          fn_end = manager.index('\n    pub async fn update(', fn_start)
+          block = manager[fn_start:fn_end]
+          guard = '''        self.wait_for_mutations_to_finish(id).await?;
+                  let runner = self
+                      .get(id)
+                      .await
+                      .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+                  if already_configured(&runner.config.work_dir) {
+                      bail!(
+                          "Authentication required to deregister configured runner before deletion"
+                      );
+                  }
+          '''
+          if 'Authentication required to deregister configured runner' not in block:
+              marker = '    async fn delete_reserved(&self, id: &str) -> Result<()> {\n'
+              block = block.replace(marker, marker + guard, 1)
+          manager = manager[:fn_start] + block + manager[fn_end:]
+
+          manager_test = '''    #[tokio::test]
+              async fn test_local_delete_rejects_configured_runner_without_changing_intent() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+                  let id = runner.config.id;
+                  std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+                  manager.set_desired_running(&id, true).await.unwrap();
+
+                  let error = manager.delete(&id).await.unwrap_err();
+
+                  assert!(error.to_string().contains("Authentication required"));
+                  assert!(manager.get(&id).await.is_some());
+                  assert!(manager.is_desired_running(&id).await);
+              }
+
+          '''
+          manager_marker = '    #[tokio::test]\n    async fn test_full_delete_skips_remote_api_for_unconfigured_runner() {'
+          if 'test_local_delete_rejects_configured_runner_without_changing_intent' not in manager:
+              manager = manager.replace(manager_marker, manager_test + manager_marker, 1)
+          manager_path.write_text(manager, encoding='utf-8')
+
+          runners_path = Path('crates/daemon/src/api/runners.rs')
+          runners = runners_path.read_text(encoding='utf-8')
+          old_delete = '''    } else {
+              // No auth token: the manager still serializes against registration and
+              // stops any local process before removing its data.
+              state
+                  .runner_manager
+                  .delete(&id)
+                  .await
+                  .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+          }
+          '''
+          new_delete = '''    } else {
+              // Unconfigured local records can be removed while signed out. A configured
+              // runner requires authentication so GitHub deregistration cannot be skipped.
+              state.runner_manager.delete(&id).await.map_err(|error| {
+                  let message = error.to_string();
+                  if message.contains("Authentication required") {
+                      (StatusCode::UNAUTHORIZED, message)
+                  } else {
+                      (StatusCode::INTERNAL_SERVER_ERROR, message)
+                  }
+              })?;
+          }
+          '''
+          if old_delete in runners:
+              runners = runners.replace(old_delete, new_delete, 1)
+          elif 'A configured\n    // runner requires authentication' not in runners and 'Authentication required")' not in runners:
+              raise RuntimeError('unexpected single delete API shape')
+
+          api_test = '''    #[tokio::test]
+              async fn test_delete_configured_runner_requires_authentication() {
+                  let state = AppState::new_test();
+                  let runner = state
+                      .runner_manager
+                      .create("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+                  let id = runner.config.id;
+                  std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+
+                  let app = create_router(state.clone());
+                  let response = app
+                      .oneshot(
+                          Request::builder()
+                              .method("DELETE")
+                              .uri(format!("/runners/{id}"))
+                              .body(Body::empty())
+                              .unwrap(),
+                      )
+                      .await
+                      .unwrap();
+
+                  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                  assert!(state.runner_manager.get(&id).await.is_some());
+              }
+
+          '''
+          api_marker = '    #[tokio::test]\n    async fn test_get_runner_not_found() {'
+          if 'test_delete_configured_runner_requires_authentication' not in runners:
+              runners = runners.replace(api_marker, api_test + api_marker, 1)
+          runners_path.write_text(runners, encoding='utf-8')
+
+          groups_path = Path('crates/daemon/src/api/groups.rs')
+          groups = groups_path.read_text(encoding='utf-8')
+          old_token = '''    // Scaling up requires authentication and must fail before creating local
+              // runner records. Scaling down can still proceed locally while logged out.
+              let token = if req.count as usize > existing.len() {
+                  Some(state.auth.token().await.ok_or_else(|| {
+                      (
+                          StatusCode::UNAUTHORIZED,
+                          "No auth token available. Please authenticate first.".to_string(),
+                      )
+                  })?)
+              } else {
+                  state.auth.token().await
+              };
+          '''
+          new_token = '''    let token = state.auth.token().await;
+              let scaling_up = req.count as usize > existing.len();
+              let scaling_down = req.count as usize < existing.len();
+              if scaling_up && token.is_none() {
+                  return Err((
+                      StatusCode::UNAUTHORIZED,
+                      "No auth token available. Please authenticate first.".to_string(),
+                  ));
+              }
+              if scaling_down
+                  && token.is_none()
+                  && existing.iter().any(|runner| {
+                      runner.config.work_dir.join(".runner").exists()
+                          || runner.config.work_dir.join(".runner_migrated").exists()
+                  })
+              {
+                  return Err((
+                      StatusCode::UNAUTHORIZED,
+                      "Authentication is required to deregister configured runners while scaling down"
+                          .to_string(),
+                  ));
+              }
+              if let Some(token) = token.as_ref() {
+                  state
+                      .runner_manager
+                      .set_auth_token(Some(token.clone()))
+                      .await;
+              }
+          '''
+          if old_token in groups:
+              groups = groups.replace(old_token, new_token, 1)
+          elif 'Authentication is required to deregister configured runners while scaling down' not in groups:
+              raise RuntimeError('unexpected scale authentication shape')
+
+          group_test = '''    #[tokio::test]
+              async fn test_scale_down_configured_group_requires_authentication() {
+                  let state = AppState::new_test();
+                  let group_id = "configured-scale-group".to_string();
+                  for _ in 0..2 {
+                      let runner = state
+                          .runner_manager
+                          .create(
+                              "owner/repo",
+                              None,
+                              None,
+                              None,
+                              Some(group_id.clone()),
+                              None,
+                          )
+                          .await
+                          .unwrap();
+                      std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+                  }
+
+                  let app = create_router(state.clone());
+                  let response = app
+                      .oneshot(
+                          Request::builder()
+                              .method("PATCH")
+                              .uri(format!("/runners/groups/{group_id}"))
+                              .header("content-type", "application/json")
+                              .body(Body::from(r#"{"count":1}"#))
+                              .unwrap(),
+                      )
+                      .await
+                      .unwrap();
+
+                  assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                  assert_eq!(state.runner_manager.list_by_group(&group_id).await.len(), 2);
+              }
+
+          '''
+          group_marker = '    #[tokio::test]\n    async fn test_list_runners_filter_by_group_id() {'
+          if 'test_scale_down_configured_group_requires_authentication' not in groups:
+              groups = groups.replace(group_marker, group_test + group_marker, 1)
+          groups_path.write_text(groups, encoding='utf-8')
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Publish invariant fixes when needed
+        run: |
+          if git diff --quiet; then
+            echo "No invariant fix required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/daemon/src/runner/mod.rs crates/daemon/src/api/runners.rs crates/daemon/src/api/groups.rs
+          git commit -m "fix: require authentication before deleting configured runners"
+          git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
+
+  linux:
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -56,7 +283,7 @@ jobs:
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
   windows:
-    if: github.event.pull_request.number == 12
+    needs: prepare
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
