@@ -3,7 +3,7 @@ name: PR 12 Create Intent Patch
 on:
   pull_request:
     branches: [master]
-    types: [reopened, synchronize]
+    types: [reopened]
 
 permissions:
   contents: write
