@@ -1,0 +1,21 @@
+diff --git a/crates/daemon/src/api/groups.rs b/crates/daemon/src/api/groups.rs
+--- a/crates/daemon/src/api/groups.rs
++++ b/crates/daemon/src/api/groups.rs
+@@ -626,7 +626,7 @@ mod tests {
+         for runner in runners {
+             state
+                 .runner_manager
+-                .update_state(&runner.config.id, RunnerState::Error)
++                .update_state(&runner.config.id, crate::runner::state::RunnerState::Error)
+                 .await
+                 .unwrap();
+         }
+@@ -720,7 +720,7 @@ mod tests {
+         for runner in runners {
+             state
+                 .runner_manager
+-                .update_state(&runner.config.id, RunnerState::Error)
++                .update_state(&runner.config.id, crate::runner::state::RunnerState::Error)
+                 .await
+                 .unwrap();
+         }
