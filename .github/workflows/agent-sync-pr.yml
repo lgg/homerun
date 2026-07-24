@@ -76,11 +76,20 @@ jobs:
               tail -n 120 /tmp/sync-step.log
               echo '```'
             } > /tmp/sync-comment.md
-            gh pr comment "$PR_NUMBER" --body-file /tmp/sync-comment.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/sync-comment.md || true
             cat /tmp/sync-step.log
             exit "$status"
           fi
           cat /tmp/sync-step.log
+
+      - name: Upload sync diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-diagnostic
+          path: /tmp/sync-step.log
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Install frontend dependencies
         working-directory: apps/desktop
