@@ -16,11 +16,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: audit/delete-integrity-and-start-admission-2026-07-24
-      - name: Package source tree
+          path: pr
+      - uses: actions/checkout@v6
+        with:
+          ref: master
+          path: base
+      - name: Package source trees
         run: |
-          tar --exclude=.git --exclude=target --exclude=node_modules --exclude=dist -czf /tmp/homerun-pr12-source.tar.gz .
+          tar --exclude=.git --exclude=target --exclude=node_modules --exclude=dist -czf /tmp/homerun-pr12-source.tar.gz pr
+          tar --exclude=.git --exclude=target --exclude=node_modules --exclude=dist -czf /tmp/homerun-master-source.tar.gz base
       - uses: actions/upload-artifact@v4
         with:
-          name: homerun-pr12-source
-          path: /tmp/homerun-pr12-source.tar.gz
+          name: homerun-pr12-and-master-source
+          path: |
+            /tmp/homerun-pr12-source.tar.gz
+            /tmp/homerun-master-source.tar.gz
           retention-days: 1
