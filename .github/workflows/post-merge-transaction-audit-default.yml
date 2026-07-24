@@ -23,17 +23,13 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Apply audited corrections
+      - name: Apply second-stage lifecycle audit
         id: apply
         shell: bash
         run: |
           set +e
-          python .github/scripts/repair-post-merge-transformer.py > audit-transform.log 2>&1
+          python .github/scripts/apply-post-merge-lifecycle-stage2.py > audit-transform.log 2>&1
           status=$?
-          if [[ $status -eq 0 ]]; then
-            python .github/scripts/apply-post-merge-transaction-audit.py >> audit-transform.log 2>&1
-            status=$?
-          fi
           set -e
           echo "status=$status" >> "$GITHUB_OUTPUT"
 
@@ -54,9 +50,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/daemon/src/runner/mod.rs crates/daemon/src/api/runners.rs
+          git add crates/daemon/src/runner/mod.rs crates/daemon/src/api/groups.rs crates/daemon/src/server.rs
           git diff --cached --check
-          git commit -m "fix: make runner lifecycle persistence transactional"
+          git commit -m "fix: reserve every runner start path before mutation"
           git push origin HEAD:audit/post-merge-transactional-lifecycle-2026-07-24
 
       - name: Fail unsuccessful transform
