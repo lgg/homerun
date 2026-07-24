@@ -7,7 +7,6 @@ on:
 concurrency:
   group: homerun-ci-${{ github.repository }}
   cancel-in-progress: false
-  queue: max
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,7 +14,7 @@ env:
 jobs:
   update-badge:
     name: Update coverage badge
-    runs-on: homerun-ci
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 60
     defaults:
       run:
