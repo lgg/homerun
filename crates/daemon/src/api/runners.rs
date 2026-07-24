@@ -138,27 +138,25 @@ pub async fn delete_runner(
 
     let token = state.auth.token().await;
     if let Some(token) = token {
-        // Always use the serialized full-delete flow while authenticated. It
-        // waits for an in-flight registration, stops any process it produced,
-        // and deregisters the resulting GitHub runner before removing files.
         state
             .runner_manager
             .full_delete(&id, &token)
             .await
-            .map_err(|e| {
+            .map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to delete runner: {e}"),
+                    format!("Failed to delete runner: {error}"),
                 )
             })?;
     } else {
-        // No auth token: the manager still serializes against registration and
-        // stops any local process before removing its data.
-        state
-            .runner_manager
-            .delete(&id)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        state.runner_manager.delete(&id).await.map_err(|error| {
+            let message = error.to_string();
+            if message.contains("Authentication required") {
+                (StatusCode::UNAUTHORIZED, message)
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, message)
+            }
+        })?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -514,6 +512,33 @@ mod tests {
             .unwrap();
         let runners: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(runners.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_configured_runner_requires_authentication() {
+        let state = AppState::new_test();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+        std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/runners/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(state.runner_manager.get(&id).await.is_some());
     }
 
     #[tokio::test]

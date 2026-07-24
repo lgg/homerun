@@ -355,18 +355,34 @@ pub async fn scale_group(
         ));
     }
 
-    // Scaling up requires authentication and must fail before creating local
-    // runner records. Scaling down can still proceed locally while logged out.
-    let token = if req.count as usize > existing.len() {
-        Some(state.auth.token().await.ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                "No auth token available. Please authenticate first.".to_string(),
-            )
-        })?)
-    } else {
-        state.auth.token().await
-    };
+    let token = state.auth.token().await;
+    let scaling_up = req.count as usize > existing.len();
+    let scaling_down = (req.count as usize) < existing.len();
+    if scaling_up && token.is_none() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "No auth token available. Please authenticate first.".to_string(),
+        ));
+    }
+    if scaling_down
+        && token.is_none()
+        && existing.iter().any(|runner| {
+            runner.config.work_dir.join(".runner").exists()
+                || runner.config.work_dir.join(".runner_migrated").exists()
+        })
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Authentication is required to deregister configured runners while scaling down"
+                .to_string(),
+        ));
+    }
+    if let Some(token) = token.as_ref() {
+        state
+            .runner_manager
+            .set_auth_token(Some(token.to_string()))
+            .await;
+    }
 
     let response = state
         .runner_manager
@@ -769,6 +785,36 @@ mod tests {
         assert_eq!(resp["previous_count"].as_u64().unwrap(), 3);
         assert_eq!(resp["actual_count"].as_u64().unwrap(), 1);
         assert_eq!(resp["removed"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_scale_down_configured_group_requires_authentication() {
+        let state = AppState::new_test();
+        let group_id = "configured-scale-group".to_string();
+        for _ in 0..2 {
+            let runner = state
+                .runner_manager
+                .create("owner/repo", None, None, None, Some(group_id.clone()), None)
+                .await
+                .unwrap();
+            std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+        }
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/runners/groups/{group_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"count":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(state.runner_manager.list_by_group(&group_id).await.len(), 2);
     }
 
     #[tokio::test]

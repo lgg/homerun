@@ -1701,6 +1701,14 @@ impl RunnerManager {
     }
 
     async fn delete_reserved(&self, id: &str) -> Result<()> {
+        self.wait_for_mutations_to_finish(id).await?;
+        let runner = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+        if already_configured(&runner.config.work_dir) {
+            bail!("Authentication required to deregister configured runner before deletion");
+        }
         self.prepare_delete_reserved(id).await?;
         self.remove_reserved(id).await?;
         self.emit_state_event(id, "deleting");
@@ -3502,6 +3510,24 @@ name"
 
         assert!(!manager.is_desired_running(&id).await);
         assert!(manager.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_local_delete_rejects_configured_runner_without_changing_intent() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+        std::fs::write(runner.config.work_dir.join(".runner"), "configured").unwrap();
+        manager.set_desired_running(&id, true).await.unwrap();
+
+        let error = manager.delete(&id).await.unwrap_err();
+
+        assert!(error.to_string().contains("Authentication required"));
+        assert!(manager.get(&id).await.is_some());
+        assert!(manager.is_desired_running(&id).await);
     }
 
     #[tokio::test]
