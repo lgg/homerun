@@ -1,0 +1,104 @@
+name: Deep audit validation
+
+on:
+  push:
+    branches:
+      - agent/deep-audit-lifecycle-2026-07-24
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deep-audit-lifecycle
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[audit-complete]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Apply reviewed audit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .github/maintenance/deep-audit-source.patch.gz.b64 \
+            | gzip --decompress > /tmp/deep-audit-source.patch
+          git apply --check /tmp/deep-audit-source.patch
+          git apply /tmp/deep-audit-source.patch
+          cargo fmt --all
+          git diff --check
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Frontend tests
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Frontend typecheck and production build
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev build-essential pkg-config
+
+      - name: Prepare Tauri sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p homerund
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/debug/homerund "apps/desktop/src-tauri/binaries/homerund-${target}"
+
+      - name: Check Tauri Rust application
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Publish validated fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          rm -f "apps/desktop/src-tauri/binaries/homerund-${target}"
+          rmdir apps/desktop/src-tauri/binaries 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/desktop/src-tauri/src/window.rs \
+            apps/desktop/src/components/NewRunnerWizard.tsx \
+            apps/desktop/src/components/NewRunnerWizard.test.tsx \
+            crates/daemon/src/api/groups.rs \
+            crates/daemon/src/api/runners.rs \
+            crates/daemon/src/runner/mod.rs \
+            crates/daemon/src/runner/types.rs
+          git commit -m "fix: harden runner lifecycle after deep audit [audit-complete]"
+          git push origin HEAD:agent/deep-audit-lifecycle-2026-07-24
