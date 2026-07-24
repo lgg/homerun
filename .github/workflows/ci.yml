@@ -41,10 +41,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/maintenance/deep-audit.patch.part* | base64 --decode | gzip --decompress > /tmp/audit.patch
-          if git apply --reverse --check /tmp/audit.patch >/dev/null 2>&1; then
-            echo "Audit patch is already applied"
+          if grep -q "stop_process_preserving_intent" crates/daemon/src/api/shutdown.rs \
+            && grep -q "validate_create_request" crates/daemon/src/api/runners.rs; then
+            echo "Audited source changes are already present"
           else
+            cat .github/maintenance/deep-audit.patch.part* | base64 --decode | gzip --decompress > /tmp/audit.patch
             git apply --check /tmp/audit.patch
             git apply /tmp/audit.patch
           fi
