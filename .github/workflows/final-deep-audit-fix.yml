@@ -1,4 +1,4 @@
-name: Final Deep Audit Failure Capture
+name: Final Deep Audit Failure Report
 
 on:
   pull_request:
@@ -19,16 +19,41 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Capture exact parallel workspace failure
+      - name: Capture parallel workspace result
+        id: tests
         shell: bash
         run: |
           set +e
           cargo test --workspace --all-targets --quiet > workspace-test.log 2>&1
           status=$?
           set -e
-          if [[ $status -ne 0 ]]; then
+          echo "$status" > workspace-test.status
+          exit 0
+
+      - name: Upload compact test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-report
+          path: |
+            workspace-test.log
+            workspace-test.status
+          retention-days: 1
+
+  report:
+    needs: capture-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace-test-report
+
+      - name: Print exact failure
+        shell: bash
+        run: |
+          status=$(cat workspace-test.status)
+          if [[ "$status" != "0" ]]; then
             grep -nE 'FAILED|failures:|panicked at|error: test failed|thread .* panicked' workspace-test.log || true
-            tail -n 160 workspace-test.log
+            tail -n 120 workspace-test.log
             exit "$status"
           fi
           echo "Workspace tests passed"
