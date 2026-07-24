@@ -3,13 +3,16 @@ name: Post-merge Transaction Audit
 on:
   push:
     branches: [audit/post-merge-transactional-lifecycle-2026-07-24]
+  pull_request:
+    branches: [master]
+    types: [reopened]
 
 permissions:
   contents: write
 
 jobs:
   prepare:
-    if: ${{ github.event.head_commit.message == 'chore: trigger post-merge transaction audit' }}
+    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message == 'chore: trigger post-merge transaction audit' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
