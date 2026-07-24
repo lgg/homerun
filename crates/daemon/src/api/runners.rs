@@ -36,7 +36,7 @@ pub async fn create_runner(
 
     let runner = state
         .runner_manager
-        .create(
+        .create_desired_running(
             &req.repo_full_name,
             req.name,
             req.labels,
@@ -47,11 +47,23 @@ pub async fn create_runner(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Spawn background task to register and start the runner.
-    let manager = state.runner_manager.clone();
+    // Persist the running intent as part of creation, then reserve the lifecycle
+    // before returning 201 so a crash or immediate Delete cannot strand a Creating runner.
     let runner_id = runner.config.id.clone();
+    if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+        let cleanup_error = state.runner_manager.delete(&runner_id).await.err();
+        let detail = cleanup_error
+            .map(|cleanup| format!("; cleanup also failed: {cleanup}"))
+            .unwrap_or_default();
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to admit runner start: {error}{detail}"),
+        ));
+    }
+
+    let manager = state.runner_manager.clone();
     tokio::spawn(async move {
-        if let Err(e) = manager.register_and_start(&runner_id, &token).await {
+        if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
             tracing::error!("Failed to register and start runner {}: {}", runner_id, e);
             let _ = manager
                 .update_state_with_error(
@@ -60,8 +72,9 @@ pub async fn create_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
-            manager.schedule_recovery(runner_id);
+            manager.schedule_recovery(runner_id.clone());
         }
+        manager.finish_start_operation(&runner_id).await;
     });
 
     Ok((StatusCode::CREATED, Json(runner)))
@@ -560,27 +573,15 @@ mod tests {
     #[tokio::test]
     async fn test_update_runner() {
         let state = AppState::new_test_authenticated();
-
-        // Create
-        let app = create_router(state.clone());
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/runners")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"repo_full_name":"aGallea/gifted"}"#))
-                    .unwrap(),
-            )
+        let runner = state
+            .runner_manager
+            .create("aGallea/gifted", None, None, None, None, None)
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let runner: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let id = runner["config"]["id"].as_str().unwrap();
+        let id = runner.config.id;
 
-        // Update labels
+        // Update labels on a stopped fixture. POST /runners intentionally starts
+        // asynchronously and is covered by dedicated create/start tests.
         let app = create_router(state);
         let response = app
             .oneshot(
@@ -789,9 +790,14 @@ mod tests {
         use crate::runner::state::RunnerState;
 
         let state = AppState::new_test_authenticated();
-        let id = create_runner_and_get_id(&state).await;
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
 
-        // Manually transition to Offline so restart is valid.
+        // Manually transition a stopped fixture to Offline so restart is valid.
         state
             .runner_manager
             .update_state(&id, RunnerState::Registering)
@@ -910,7 +916,12 @@ mod tests {
     #[tokio::test]
     async fn test_update_runner_native_mode_while_stopped() {
         let state = AppState::new_test_authenticated();
-        let id = create_runner_and_get_id(&state).await;
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
 
         let app = create_router(state);
         let response = app

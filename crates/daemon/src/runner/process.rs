@@ -180,11 +180,9 @@ mod tests {
     async fn test_remove_runner_fails_without_config_script() {
         let dir = tempfile::tempdir().unwrap();
         let result = remove_runner(dir.path(), "fake-token").await;
-        // On Unix, spawn fails because the script doesn't exist.
-        // On Windows, the command may run but exit with failure.
-        // Both are acceptable — the function handles non-success exits.
-        // Just verify it doesn't panic.
-        let _ = result;
+        // On Unix, spawning the missing script fails. On Windows, cmd.exe may
+        // start but must still return a non-success status. Both must surface.
+        assert!(result.is_err());
     }
 
     #[test]

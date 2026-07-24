@@ -1172,6 +1172,49 @@ impl RunnerManager {
         group_id: Option<String>,
         container: Option<types::ContainerConfig>,
     ) -> Result<RunnerInfo> {
+        self.create_with_intent(
+            repo_full_name,
+            name,
+            labels,
+            mode,
+            group_id,
+            container,
+            false,
+        )
+        .await
+    }
+
+    pub(crate) async fn create_desired_running(
+        &self,
+        repo_full_name: &str,
+        name: Option<String>,
+        labels: Option<Vec<String>>,
+        mode: Option<RunnerMode>,
+        group_id: Option<String>,
+        container: Option<types::ContainerConfig>,
+    ) -> Result<RunnerInfo> {
+        self.create_with_intent(
+            repo_full_name,
+            name,
+            labels,
+            mode,
+            group_id,
+            container,
+            true,
+        )
+        .await
+    }
+
+    async fn create_with_intent(
+        &self,
+        repo_full_name: &str,
+        name: Option<String>,
+        labels: Option<Vec<String>>,
+        mode: Option<RunnerMode>,
+        group_id: Option<String>,
+        container: Option<types::ContainerConfig>,
+        desired: bool,
+    ) -> Result<RunnerInfo> {
         Self::validate_create_request(
             repo_full_name,
             name.as_deref(),
@@ -1264,9 +1307,15 @@ impl RunnerManager {
             }
             runners.insert(id.clone(), runner.clone());
         }
+        if desired {
+            self.desired_running.write().await.insert(id.clone());
+        }
 
         if let Err(error) = self.save_to_disk_locked().await {
             self.runners.write().await.remove(&id);
+            if desired {
+                self.desired_running.write().await.remove(&id);
+            }
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
             return Err(error).context("persisting newly-created runner");
         }
@@ -1287,7 +1336,7 @@ impl RunnerManager {
 
         for i in 0..count {
             match self
-                .create(
+                .create_desired_running(
                     repo_full_name,
                     None,
                     labels.clone(),
@@ -1348,7 +1397,7 @@ impl RunnerManager {
 
             for _ in 0..to_add {
                 match self
-                    .create(
+                    .create_desired_running(
                         &repo_full_name,
                         None,
                         Some(template.config.labels.clone()),
@@ -1873,9 +1922,9 @@ impl RunnerManager {
         result
     }
 
-    /// Start an existing Offline/Error runner while the caller retains the
-    /// start reservation. Manual API callers persist desired-running intent before
-    /// spawning this work; startup restore and recovery already have that intent.
+    /// Start a Creating/Offline/Error runner while the caller retains the start
+    /// reservation. Manual API callers persist desired-running intent before spawning
+    /// this work; startup restore and recovery already have that intent.
     pub(crate) async fn start_existing_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
         self.update_state(id, RunnerState::Registering).await?;
         self.emit_state_event(id, "registering");
@@ -3157,6 +3206,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_desired_running_persists_intent_atomically() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create_desired_running("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+
+        assert!(manager.is_desired_running(&runner.config.id).await);
+        let persisted: Vec<PersistedRunner> = serde_json::from_str(
+            &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].config.id, runner.config.id);
+        assert!(persisted[0].was_running);
+    }
+
+    #[tokio::test]
     async fn test_desired_running_is_persisted_independently_from_error_state() {
         let manager = create_test_manager();
         let runner = manager
@@ -4131,14 +4198,10 @@ name"
             .await
             .unwrap();
 
-        // full_delete with invalid token: GitHub deregistration will fail but runner
-        // should still be removed from the local store.
+        // The runner was never configured, so full_delete must skip the remote
+        // API entirely and remove it even when the supplied token is invalid.
         let result = manager.full_delete(&id, "invalid-token").await;
-        // We expect success (the function ignores deregistration errors)
-        assert!(
-            result.is_ok(),
-            "full_delete should succeed even with invalid token"
-        );
+        assert!(result.is_ok(), "unconfigured full_delete should stay local");
         assert!(
             manager.get(&id).await.is_none(),
             "runner should be removed from the manager"

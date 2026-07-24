@@ -51,13 +51,42 @@ pub async fn create_batch(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Spawn background registration for each runner.
+    // Creation persisted desired-running intent atomically. Reserve every start
+    // before spawning any work so the batch response cannot publish unadmitted runners.
+    let mut reserved: Vec<String> = Vec::with_capacity(runners.len());
     for runner in &runners {
-        let manager = state.runner_manager.clone();
         let runner_id = runner.config.id.clone();
+        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+            for reserved_id in &reserved {
+                state
+                    .runner_manager
+                    .finish_start_operation(reserved_id)
+                    .await;
+            }
+            let mut cleanup_errors = Vec::new();
+            for created in &runners {
+                if let Err(cleanup) = state.runner_manager.delete(&created.config.id).await {
+                    cleanup_errors.push(format!("{}: {cleanup}", created.config.id));
+                }
+            }
+            let cleanup_detail = if cleanup_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; cleanup failures: {}", cleanup_errors.join(", "))
+            };
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to admit batch runner start: {error}{cleanup_detail}"),
+            ));
+        }
+        reserved.push(runner_id);
+    }
+
+    for runner_id in reserved {
+        let manager = state.runner_manager.clone();
         let token = token.clone();
         tokio::spawn(async move {
-            if let Err(e) = manager.register_and_start(&runner_id, &token).await {
+            if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
                 tracing::error!("Failed to register runner {}: {}", runner_id, e);
                 let _ = manager
                     .update_state_with_error(
@@ -66,8 +95,9 @@ pub async fn create_batch(
                         Some(format!("{e:#}")),
                     )
                     .await;
-                manager.schedule_recovery(runner_id);
+                manager.schedule_recovery(runner_id.clone());
             }
+            manager.finish_start_operation(&runner_id).await;
         });
     }
 
@@ -390,16 +420,44 @@ pub async fn scale_group(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Spawn registration for added runners. The precondition above guarantees
-    // a token whenever additions are possible.
+    // Scale-up creation persisted intent atomically. Reserve every new runner
+    // before spawning any of them so the returned count is fully admitted.
+    let mut reserved: Vec<String> = Vec::with_capacity(response.added.len());
     for runner in &response.added {
-        let manager = state.runner_manager.clone();
         let runner_id = runner.config.id.clone();
+        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+            for reserved_id in &reserved {
+                state
+                    .runner_manager
+                    .finish_start_operation(reserved_id)
+                    .await;
+            }
+            let mut cleanup_errors = Vec::new();
+            for added in &response.added {
+                if let Err(cleanup) = state.runner_manager.delete(&added.config.id).await {
+                    cleanup_errors.push(format!("{}: {cleanup}", added.config.id));
+                }
+            }
+            let cleanup_detail = if cleanup_errors.is_empty() {
+                String::new()
+            } else {
+                format!("; cleanup failures: {}", cleanup_errors.join(", "))
+            };
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to admit scaled runner start: {error}{cleanup_detail}"),
+            ));
+        }
+        reserved.push(runner_id);
+    }
+
+    for runner_id in reserved {
+        let manager = state.runner_manager.clone();
         let token = token
             .clone()
             .expect("scale-up token checked before mutation");
         tokio::spawn(async move {
-            if let Err(e) = manager.register_and_start(&runner_id, &token).await {
+            if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
                 tracing::error!("Failed to register runner {}: {}", runner_id, e);
                 let _ = manager
                     .update_state_with_error(
@@ -408,8 +466,9 @@ pub async fn scale_group(
                         Some(format!("{e:#}")),
                     )
                     .await;
-                manager.schedule_recovery(runner_id);
+                manager.schedule_recovery(runner_id.clone());
             }
+            manager.finish_start_operation(&runner_id).await;
         });
     }
 
@@ -457,8 +516,8 @@ pub async fn delete_group(
             let result = if let Some(ref token) = token {
                 manager.full_delete(&runner_id, token).await
             } else {
-                // Local deletion still waits for registration and stops any
-                // process safely; it simply cannot deregister from GitHub.
+                // Local deletion is allowed only for runners that were never
+                // configured; configured runners return a per-runner auth error.
                 manager.delete(&runner_id).await
             };
             (runner_id, result)
