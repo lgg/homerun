@@ -11,10 +11,11 @@ permissions:
   pull-requests: write
 
 # A single project-specific runner executes every HomeRun maintenance workflow.
-# Keep jobs queued instead of cancelling older work when another commit arrives.
+# Keep every pending run queued instead of replacing older work when new events arrive.
 concurrency:
   group: homerun-ci-${{ github.repository }}
   cancel-in-progress: false
+  queue: max
 
 env:
   CARGO_TERM_COLOR: always
@@ -22,6 +23,8 @@ env:
 
 jobs:
   quality:
+    # Never execute untrusted fork code on the persistent self-hosted machine.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     name: Full quality gate
     runs-on: homerun-ci
     timeout-minutes: 90

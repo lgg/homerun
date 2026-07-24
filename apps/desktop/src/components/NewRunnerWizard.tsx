@@ -68,9 +68,23 @@ export function NewRunnerWizard({
       setResolvedPreselectFor(null);
       return;
     }
-    if (resolvedPreselectFor === preselectedRepo || reposLoading) return;
+    if (reposLoading) return;
 
     const found = repos.find((r) => r.full_name === preselectedRepo) ?? null;
+    if (resolvedPreselectFor === preselectedRepo) {
+      if (selectedRepo?.full_name === preselectedRepo) {
+        if (found) return;
+        // The repository disappeared after it had been selected.
+        setSelectedRepo(null);
+        setName("");
+        setStep(0);
+        return;
+      }
+      // Do not override a repository the user selected manually after a stale
+      // preselection, but retry an unresolved preselection when polling finds it.
+      if (selectedRepo || !found) return;
+    }
+
     setSelectedRepo(found);
     setResolvedPreselectFor(preselectedRepo);
 
@@ -80,9 +94,10 @@ export function NewRunnerWizard({
     } else {
       // A stale/deleted repository must not leave the wizard stuck on an
       // unresolvable "Loading repository..." screen.
+      setName("");
       setStep(0);
     }
-  }, [preselectedRepo, repos, reposLoading, resolvedPreselectFor]);
+  }, [preselectedRepo, repos, reposLoading, resolvedPreselectFor, selectedRepo]);
 
   const [mode, setMode] = useState<RunnerModeChoice>("app");
   const [containerImage, setContainerImage] = useState(DEFAULT_CONTAINER_IMAGE);

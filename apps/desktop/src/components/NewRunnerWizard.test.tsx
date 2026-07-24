@@ -281,6 +281,33 @@ describe("NewRunnerWizard", () => {
     expect(screen.queryByText("Loading repository...")).not.toBeInTheDocument();
   });
 
+  it("resolves a stale preselection when repository polling later finds it", async () => {
+    vi.useFakeTimers();
+    let unmount: (() => void) | undefined;
+    try {
+      vi.mocked(api.listRepos)
+        .mockResolvedValueOnce(mockRepos.filter((repo) => repo.full_name !== "org/frontend"))
+        .mockResolvedValue(mockRepos);
+
+      const rendered = await renderWizard({ preselectedRepo: "org/frontend" });
+      unmount = rendered.unmount;
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByPlaceholderText("Search repositories...")).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      const nameInput = screen.getByLabelText("Name") as HTMLInputElement;
+      expect(nameInput.value).toMatch(/^frontend-runner-/);
+    } finally {
+      unmount?.();
+      vi.useRealTimers();
+    }
+  });
+
   it("Cancel button calls onClose", async () => {
     const { props } = await renderWizard();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
