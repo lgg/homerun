@@ -8,9 +8,14 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: homerun-ci-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   release-please:
-    runs-on: self-hosted
+    runs-on: homerun-ci
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash
@@ -20,31 +25,40 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      # When release-please creates/updates a PR, regenerate Cargo.lock files
-      # so they stay in sync with the version bump in Cargo.toml
+      - name: Verify release toolchain
+        if: ${{ steps.release.outputs.pr }}
+        run: |
+          set -euo pipefail
+          for tool in git rustc cargo; do
+            command -v "$tool" >/dev/null 2>&1 || {
+              echo "::error::$tool is not installed on the homerun-ci runner"
+              exit 1
+            }
+          done
+
+      # When release-please creates or updates a PR, regenerate Cargo.lock files
+      # so they remain synchronized with the version bump in Cargo.toml.
       - uses: actions/checkout@v6
         if: ${{ steps.release.outputs.pr }}
         with:
           ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Add Rust to PATH
-        if: ${{ steps.release.outputs.pr }}
-        run: |
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          echo "$(dirname "$(rustup which rustc)")" >> $GITHUB_PATH
-
       - name: Regenerate Cargo.lock files
         if: ${{ steps.release.outputs.pr }}
         run: |
+          set -euo pipefail
           cargo generate-lockfile
-          cd apps/desktop/src-tauri && cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Commit updated Cargo.lock files
         if: ${{ steps.release.outputs.pr }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.lock apps/desktop/src-tauri/Cargo.lock
-          git diff --cached --quiet || git commit -m "chore: update Cargo.lock files for version bump"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update Cargo.lock files for version bump"
+            git push
+          fi

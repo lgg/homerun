@@ -1,8 +1,10 @@
 use crate::runner::state::RunnerState;
 use crate::runner::steps::StepInfo;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 const MAX_DISPLAY_NAME_CHARS: usize = 100;
+const MAX_LABEL_CHARS: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -207,6 +209,31 @@ where
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
+pub(crate) fn normalize_labels(labels: Vec<String>) -> anyhow::Result<Vec<String>> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+
+    for label in labels {
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().count() > MAX_LABEL_CHARS {
+            anyhow::bail!("Runner labels must be at most {MAX_LABEL_CHARS} characters");
+        }
+        if trimmed.contains(',') || trimmed.chars().any(char::is_control) {
+            anyhow::bail!("Runner labels cannot contain commas or control characters");
+        }
+
+        let key = trimmed.to_lowercase();
+        if seen.insert(key) {
+            normalized.push(trimmed.to_string());
+        }
+    }
+
+    Ok(normalized)
+}
+
 pub(crate) fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
@@ -263,6 +290,20 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("group_id"));
         assert!(!json.contains("display_name"));
+    }
+
+    #[test]
+    fn test_normalize_labels_trims_deduplicates_and_rejects_unsafe_values() {
+        let labels = normalize_labels(vec![
+            " rust ".to_string(),
+            "RUST".to_string(),
+            "docker".to_string(),
+            "".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(labels, vec!["rust", "docker"]);
+        assert!(normalize_labels(vec!["bad,label".to_string()]).is_err());
+        assert!(normalize_labels(vec!["bad\nlabel".to_string()]).is_err());
     }
 
     #[test]

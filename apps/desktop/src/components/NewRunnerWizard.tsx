@@ -51,7 +51,7 @@ export function NewRunnerWizard({
   const [selectedRepo, setSelectedRepo] = useState<RepoInfo | null>(() => {
     return null; // will be resolved once repos load if preselectedRepo is set
   });
-  const [resolvedPreselect, setResolvedPreselect] = useState(false);
+  const [resolvedPreselectFor, setResolvedPreselectFor] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [labelsInput, setLabelsInput] = useState(DEFAULT_LABELS.join(", "));
 
@@ -59,11 +59,20 @@ export function NewRunnerWizard({
   // This must be an effect (not useMemo): setting state while rendering can cause
   // re-entrant renders and an intermittently disappearing wizard.
   useEffect(() => {
-    if (!preselectedRepo || resolvedPreselect || reposLoading) return;
+    if (!preselectedRepo) {
+      if (resolvedPreselectFor !== null) {
+        setSelectedRepo(null);
+        setName("");
+        setStep(0);
+      }
+      setResolvedPreselectFor(null);
+      return;
+    }
+    if (resolvedPreselectFor === preselectedRepo || reposLoading) return;
 
     const found = repos.find((r) => r.full_name === preselectedRepo) ?? null;
     setSelectedRepo(found);
-    setResolvedPreselect(true);
+    setResolvedPreselectFor(preselectedRepo);
 
     if (found) {
       setName(generateName(found.name));
@@ -73,7 +82,7 @@ export function NewRunnerWizard({
       // unresolvable "Loading repository..." screen.
       setStep(0);
     }
-  }, [preselectedRepo, repos, reposLoading, resolvedPreselect]);
+  }, [preselectedRepo, repos, reposLoading, resolvedPreselectFor]);
 
   const [mode, setMode] = useState<RunnerModeChoice>("app");
   const [containerImage, setContainerImage] = useState(DEFAULT_CONTAINER_IMAGE);

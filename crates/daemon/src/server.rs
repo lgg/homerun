@@ -244,7 +244,8 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
                     );
                     state
                         .runner_manager
-                        .monitor_orphaned_process(&runner.config.id, pid);
+                        .monitor_orphaned_process(&runner.config.id, pid)
+                        .await;
                 }
             }
         }

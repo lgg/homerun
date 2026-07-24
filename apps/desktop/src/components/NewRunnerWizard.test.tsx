@@ -248,6 +248,32 @@ describe("NewRunnerWizard", () => {
     await waitFor(() => expect((nameInput as HTMLInputElement).value).toMatch(/^frontend-runner-/));
   });
 
+  it("resolves a changed preselected repository while remaining mounted", async () => {
+    const { rerender, props } = await renderWizard({ preselectedRepo: "org/frontend" });
+    const firstName = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await waitFor(() => expect(firstName.value).toMatch(/^frontend-runner-/));
+
+    rerender(
+      <AuthProvider>
+        <NewRunnerWizard {...props} preselectedRepo="org/backend" />
+      </AuthProvider>,
+    );
+    const changedName = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await waitFor(() => expect(changedName.value).toMatch(/^backend-runner-/));
+  });
+
+  it("returns to repository selection when preselection is cleared", async () => {
+    const { rerender, props } = await renderWizard({ preselectedRepo: "org/frontend" });
+    expect(await screen.findByLabelText("Name")).toBeInTheDocument();
+
+    rerender(
+      <AuthProvider>
+        <NewRunnerWizard {...props} preselectedRepo={undefined} />
+      </AuthProvider>,
+    );
+    expect(await screen.findByPlaceholderText("Search repositories...")).toBeInTheDocument();
+  });
+
   it("falls back to repository selection when a preselected repository is stale", async () => {
     await renderWizard({ preselectedRepo: "org/removed" });
 
