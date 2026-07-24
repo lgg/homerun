@@ -111,6 +111,9 @@ pub async fn update_runner(
             (StatusCode::NOT_FOUND, message)
         } else if message.contains("cannot be changed")
             || message.contains("only be changed while the runner is stopped")
+            || message.contains("operation in progress")
+            || message.contains("being deleted")
+            || message.contains("being updated")
         {
             (StatusCode::CONFLICT, message)
         } else if message.contains("persisting runner update") {
@@ -193,21 +196,16 @@ pub async fn start_runner(
         )
     })?;
 
+    state
+        .runner_manager
+        .begin_start_operation(&id)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+
     let manager = state.runner_manager.clone();
     let runner_id = id.clone();
     tokio::spawn(async move {
-        // Offline/Error -> Registering is a valid transition
-        if let Err(e) = manager
-            .update_state(&runner_id, crate::runner::state::RunnerState::Registering)
-            .await
-        {
-            tracing::error!("Failed to transition runner {}: {}", runner_id, e);
-            return;
-        }
-        if let Err(e) = manager
-            .register_and_start_from_registering(&runner_id, &token)
-            .await
-        {
+        if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
             tracing::error!("Failed to start runner {}: {}", runner_id, e);
             let _ = manager
                 .update_state_with_error(
@@ -216,8 +214,9 @@ pub async fn start_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
-            manager.schedule_recovery(runner_id);
+            manager.schedule_recovery(runner_id.clone());
         }
+        manager.finish_start_operation(&runner_id).await;
     });
 
     Ok(StatusCode::OK)
@@ -295,16 +294,29 @@ pub async fn restart_runner(
         )
     })?;
 
-    // Stop if running, but retain desired-running intent throughout restart.
+    // Reserve the full stop -> start sequence before mutating state. This
+    // makes concurrent Start/Restart/Delete/PATCH requests deterministic.
+    state
+        .runner_manager
+        .begin_start_operation(&id)
+        .await
+        .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+
+    if let Err(error) = state.runner_manager.set_desired_running(&id, true).await {
+        state.runner_manager.finish_start_operation(&id).await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to persist restart intent: {error}"),
+        ));
+    }
+
+    // Stop if running, retaining the already-persisted restart intent.
     if runner.state == crate::runner::state::RunnerState::Online
         || runner.state == crate::runner::state::RunnerState::Busy
         || state.runner_manager.has_active_process(&id).await
     {
-        if let Err(error) = state
-            .runner_manager
-            .stop_process_preserving_intent(&id)
-            .await
-        {
+        if let Err(error) = state.runner_manager.stop_process_internal(&id, false).await {
+            state.runner_manager.finish_start_operation(&id).await;
             state.runner_manager.schedule_recovery(id.clone());
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -313,23 +325,11 @@ pub async fn restart_runner(
         }
     }
 
-    // Now start — the old process is fully stopped.
-
+    // Now start — the old process is fully stopped and deletion remains blocked.
     let manager = state.runner_manager.clone();
     let runner_id = id.clone();
     tokio::spawn(async move {
-        if let Err(e) = manager
-            .update_state(&runner_id, crate::runner::state::RunnerState::Registering)
-            .await
-        {
-            tracing::error!("Failed to transition runner {}: {}", runner_id, e);
-            manager.schedule_recovery(runner_id);
-            return;
-        }
-        if let Err(e) = manager
-            .register_and_start_from_registering(&runner_id, &token)
-            .await
-        {
+        if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
             tracing::error!("Failed to restart runner {}: {}", runner_id, e);
             let _ = manager
                 .update_state_with_error(
@@ -338,8 +338,9 @@ pub async fn restart_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
-            manager.schedule_recovery(runner_id);
+            manager.schedule_recovery(runner_id.clone());
         }
+        manager.finish_start_operation(&runner_id).await;
     });
 
     Ok(StatusCode::OK)
@@ -351,6 +352,46 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_start_reserves_before_publishing_registering_state() {
+        let state = AppState::new_test_authenticated();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+        state
+            .runner_manager
+            .update_state(&id, crate::runner::state::RunnerState::Error)
+            .await
+            .unwrap();
+        state
+            .runner_manager
+            .begin_stop_operation(&id)
+            .await
+            .unwrap();
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runners/{id}/start"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            state.runner_manager.get(&id).await.unwrap().state,
+            crate::runner::state::RunnerState::Error
+        );
+        state.runner_manager.finish_stop_operation(&id).await;
+    }
 
     #[tokio::test]
     async fn test_restart_rejects_transitional_state_before_authentication() {

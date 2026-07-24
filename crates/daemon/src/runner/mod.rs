@@ -80,6 +80,7 @@ struct ProcessHandle {
 #[derive(Default)]
 struct LifecycleOperations {
     starting: HashSet<String>,
+    stopping: HashSet<String>,
     updating: HashSet<String>,
     deleting: HashSet<String>,
 }
@@ -499,6 +500,11 @@ impl RunnerManager {
     /// Save all runner configs to disk as JSON.
     pub async fn save_to_disk(&self) -> Result<()> {
         let _persistence_guard = self.persistence_lock.lock().await;
+        self.save_to_disk_locked().await
+    }
+
+    /// Persist a snapshot while the caller holds `persistence_lock`.
+    async fn save_to_disk_locked(&self) -> Result<()> {
         let persisted = {
             let desired_running = self.desired_running.read().await;
             let runners = self.runners.read().await;
@@ -1235,6 +1241,7 @@ impl RunnerManager {
             estimated_job_duration_secs: None,
         };
 
+        let _persistence_guard = self.persistence_lock.lock().await;
         {
             let mut runners = self.runners.write().await;
             if runners.values().any(|existing| {
@@ -1258,7 +1265,7 @@ impl RunnerManager {
             runners.insert(id.clone(), runner.clone());
         }
 
-        if let Err(error) = self.save_to_disk().await {
+        if let Err(error) = self.save_to_disk_locked().await {
             self.runners.write().await.remove(&id);
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
             return Err(error).context("persisting newly-created runner");
@@ -1399,13 +1406,6 @@ impl RunnerManager {
                 let token = self.auth_token.read().await.clone();
                 let delete_result = if let Some(token) = token {
                     self.full_delete(&runner.config.id, &token).await
-                } else if runner.state == RunnerState::Online
-                    || self.has_active_process(&runner.config.id).await
-                {
-                    match self.stop_process(&runner.config.id).await {
-                        Ok(()) => self.delete(&runner.config.id).await,
-                        Err(error) => Err(error),
-                    }
                 } else {
                     self.delete(&runner.config.id).await
                 };
@@ -1543,13 +1543,19 @@ impl RunnerManager {
         self.processes.read().await.contains_key(id)
     }
 
-    async fn begin_start_operation(&self, id: &str) -> Result<()> {
+    pub(crate) async fn begin_start_operation(&self, id: &str) -> Result<()> {
         let mut operations = self.lifecycle_operations.lock().await;
         if operations.deleting.contains(id) {
             bail!("Runner '{id}' is being deleted");
         }
+        if operations.stopping.contains(id) {
+            bail!("Runner '{id}' has a stop operation in progress");
+        }
         if operations.updating.contains(id) {
             bail!("Runner '{id}' is being updated");
+        }
+        if !self.runners.read().await.contains_key(id) {
+            bail!("Runner not found");
         }
         if !operations.starting.insert(id.to_string()) {
             bail!("Runner '{id}' already has a start operation in progress");
@@ -1557,8 +1563,32 @@ impl RunnerManager {
         Ok(())
     }
 
-    async fn finish_start_operation(&self, id: &str) {
+    pub(crate) async fn finish_start_operation(&self, id: &str) {
         self.lifecycle_operations.lock().await.starting.remove(id);
+    }
+
+    pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
+        let mut operations = self.lifecycle_operations.lock().await;
+        if operations.deleting.contains(id) {
+            bail!("Runner '{id}' is being deleted");
+        }
+        if operations.starting.contains(id) {
+            bail!("Runner '{id}' has a start operation in progress");
+        }
+        if operations.updating.contains(id) {
+            bail!("Runner '{id}' is being updated");
+        }
+        if !self.runners.read().await.contains_key(id) {
+            bail!("Runner not found");
+        }
+        if !operations.stopping.insert(id.to_string()) {
+            bail!("Runner '{id}' already has a stop operation in progress");
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn finish_stop_operation(&self, id: &str) {
+        self.lifecycle_operations.lock().await.stopping.remove(id);
     }
 
     async fn begin_update_operation(&self, id: &str) -> Result<()> {
@@ -1568,6 +1598,9 @@ impl RunnerManager {
         }
         if operations.starting.contains(id) {
             bail!("Runner '{id}' has a start operation in progress");
+        }
+        if operations.stopping.contains(id) {
+            bail!("Runner '{id}' has a stop operation in progress");
         }
         if !self.runners.read().await.contains_key(id) {
             bail!("Runner not found");
@@ -1601,7 +1634,10 @@ impl RunnerManager {
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
             loop {
                 let operations = self.lifecycle_operations.lock().await;
-                if !operations.starting.contains(id) && !operations.updating.contains(id) {
+                if !operations.starting.contains(id)
+                    && !operations.stopping.contains(id)
+                    && !operations.updating.contains(id)
+                {
                     break;
                 }
                 drop(operations);
@@ -1632,16 +1668,18 @@ impl RunnerManager {
         // deletion first cleared it. Clear it again after the reservation drains.
         self.set_desired_running(id, false).await?;
         if self.has_active_process(id).await {
-            self.stop_process(id).await?;
+            self.stop_process_internal(id, true).await?;
         }
 
+        let _persistence_guard = self.persistence_lock.lock().await;
         let removed = self.runners.write().await.remove(id);
-        if let Err(error) = self.save_to_disk().await {
+        if let Err(error) = self.save_to_disk_locked().await {
             if let Some(runner) = removed {
                 self.runners.write().await.insert(id.to_string(), runner);
             }
             return Err(error).context("persisting runner deletion");
         }
+        drop(_persistence_guard);
 
         // Destructive cleanup happens only after the durable state no longer
         // references this runner. A failed write therefore cannot resurrect a
@@ -1673,6 +1711,7 @@ impl RunnerManager {
             Some(value) => Some(types::normalize_display_name(value)?),
             None => None,
         };
+        let _persistence_guard = self.persistence_lock.lock().await;
         let previous = {
             let mut runners = self.runners.write().await;
             let runner = runners
@@ -1723,7 +1762,7 @@ impl RunnerManager {
             (previous_config, applied_config)
         };
 
-        if let Err(error) = self.save_to_disk().await {
+        if let Err(error) = self.save_to_disk_locked().await {
             let mut runners = self.runners.write().await;
             if let Some(runner) = runners.get_mut(id) {
                 let current_config = (
@@ -1741,6 +1780,7 @@ impl RunnerManager {
             }
             return Err(error).context("persisting runner update");
         }
+        drop(_persistence_guard);
         self.get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))
@@ -1825,6 +1865,15 @@ impl RunnerManager {
         .await;
         self.finish_start_operation(id).await;
         result
+    }
+
+    /// Start an existing Offline/Error runner while the caller retains the
+    /// start reservation. State cannot be exposed as Registering before admission.
+    pub(crate) async fn start_existing_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
+        self.set_desired_running(id, true).await?;
+        self.update_state(id, RunnerState::Registering).await?;
+        self.emit_state_event(id, "registering");
+        self.do_register_and_start(id, auth_token).await
     }
 
     /// Common register-and-start flow (assumes already in Registering state):
@@ -2510,7 +2559,8 @@ impl RunnerManager {
         Ok(())
     }
 
-    async fn set_desired_running(&self, runner_id: &str, desired: bool) -> Result<()> {
+    pub(crate) async fn set_desired_running(&self, runner_id: &str, desired: bool) -> Result<()> {
+        let _persistence_guard = self.persistence_lock.lock().await;
         if desired && !self.runners.read().await.contains_key(runner_id) {
             bail!("Runner not found");
         }
@@ -2525,7 +2575,7 @@ impl RunnerManager {
             }
             previous
         };
-        if let Err(error) = self.save_to_disk().await {
+        if let Err(error) = self.save_to_disk_locked().await {
             let mut desired_running = self.desired_running.write().await;
             if previous {
                 desired_running.insert(runner_id.to_string());
@@ -2598,20 +2648,18 @@ impl RunnerManager {
                     continue;
                 };
 
-                if let Err(error) = manager
-                    .update_state(&runner_id, RunnerState::Registering)
-                    .await
-                {
-                    tracing::warn!(runner = %runner_id, error = %error, "Recovery state transition failed");
-                    break;
+                if let Err(error) = manager.begin_start_operation(&runner_id).await {
+                    tracing::debug!(
+                        runner = %runner_id,
+                        error = %error,
+                        "Recovery deferred by another lifecycle operation"
+                    );
+                    continue;
                 }
-                manager.emit_state_event(&runner_id, "registering");
 
-                match manager
-                    .register_and_start_from_registering(&runner_id, &token)
-                    .await
-                {
+                match manager.start_existing_reserved(&runner_id, &token).await {
                     Ok(()) => {
+                        manager.finish_start_operation(&runner_id).await;
                         tracing::info!(
                             runner = %runner_id,
                             attempt = attempt + 1,
@@ -2638,6 +2686,7 @@ impl RunnerManager {
                             )
                             .await;
                         manager.emit_state_event(&runner_id, "error");
+                        manager.finish_start_operation(&runner_id).await;
                     }
                 }
             }
@@ -2647,8 +2696,9 @@ impl RunnerManager {
     }
 
     async fn begin_stop(&self, id: &str, clear_desired: bool) -> Result<()> {
-        // Match save_to_disk's lock ordering so a persistence snapshot cannot
-        // deadlock with a lifecycle transition.
+        // Hold the persistence transaction across mutation, durable write, and
+        // rollback so no other save can publish an intermediate stop state.
+        let _persistence_guard = self.persistence_lock.lock().await;
         let (previous_state, was_desired) = {
             let mut desired_running = self.desired_running.write().await;
             let mut runners = self.runners.write().await;
@@ -2672,7 +2722,7 @@ impl RunnerManager {
             (previous_state, was_desired)
         };
 
-        if let Err(error) = self.save_to_disk().await {
+        if let Err(error) = self.save_to_disk_locked().await {
             let mut desired_running = self.desired_running.write().await;
             let mut runners = self.runners.write().await;
             if let Some(runner) = runners.get_mut(id) {
@@ -2688,25 +2738,32 @@ impl RunnerManager {
             return Err(error).context("persisting stop transition");
         }
 
+        drop(_persistence_guard);
         self.emit_state_event(id, "stopping");
         Ok(())
     }
 
     /// Stop a running runner process because the user explicitly requested it.
     pub async fn stop_process(&self, id: &str) -> Result<()> {
-        self.stop_process_internal(id, true).await
+        self.begin_stop_operation(id).await?;
+        let result = self.stop_process_internal(id, true).await;
+        self.finish_stop_operation(id).await;
+        result
     }
 
     /// Stop a process while retaining the user's desired-running intent. This is
-    /// used by restart and daemon shutdown flows so a later launch can restore it.
+    /// used by daemon shutdown flows so a later launch can restore it.
     pub async fn stop_process_preserving_intent(&self, id: &str) -> Result<()> {
-        self.stop_process_internal(id, false).await
+        self.begin_stop_operation(id).await?;
+        let result = self.stop_process_internal(id, false).await;
+        self.finish_stop_operation(id).await;
+        result
     }
 
     /// Signals the monitoring task to kill the child via `Notify`, then waits
     /// for the `watch` channel to confirm the process has fully exited.
     /// No shared lock on `Child` — eliminates the deadlock from issue #31.
-    async fn stop_process_internal(&self, id: &str, clear_desired: bool) -> Result<()> {
+    pub(crate) async fn stop_process_internal(&self, id: &str, clear_desired: bool) -> Result<()> {
         // State and desired-running intent are changed atomically. A rejected
         // transition must never silently disable future recovery.
         self.begin_stop(id, clear_desired).await?;
@@ -2796,7 +2853,7 @@ impl RunnerManager {
             || runner.state == RunnerState::Busy
             || self.has_active_process(id).await
         {
-            self.stop_process(id)
+            self.stop_process_internal(id, true)
                 .await
                 .context("Failed to stop runner before deletion")?;
         }
@@ -3282,6 +3339,121 @@ name"
 
         manager.begin_start_operation(&id).await.unwrap();
         manager.finish_start_operation(&id).await;
+    }
+
+    #[tokio::test]
+    async fn test_persisted_mutations_wait_for_their_persistence_transaction() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        let persistence_guard = manager.persistence_lock.lock().await;
+        let update = {
+            let manager = manager.clone();
+            let id = id.clone();
+            tokio::spawn(async move {
+                manager
+                    .update(
+                        &id,
+                        types::UpdateRunnerRequest {
+                            labels: None,
+                            mode: None,
+                            display_name: Some(Some("durable alias".to_string())),
+                        },
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert_eq!(manager.get(&id).await.unwrap().config.display_name, None);
+        drop(persistence_guard);
+        update.await.unwrap().unwrap();
+        assert_eq!(
+            manager
+                .get(&id)
+                .await
+                .unwrap()
+                .config
+                .display_name
+                .as_deref(),
+            Some("durable alias")
+        );
+
+        manager.set_desired_running(&id, true).await.unwrap();
+        let persistence_guard = manager.persistence_lock.lock().await;
+        let clear_intent = {
+            let manager = manager.clone();
+            let id = id.clone();
+            tokio::spawn(async move { manager.set_desired_running(&id, false).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(manager.is_desired_running(&id).await);
+        drop(persistence_guard);
+        clear_intent.await.unwrap().unwrap();
+        assert!(!manager.is_desired_running(&id).await);
+
+        manager
+            .update_state(&id, RunnerState::Registering)
+            .await
+            .unwrap();
+        manager
+            .update_state(&id, RunnerState::Online)
+            .await
+            .unwrap();
+        manager.set_desired_running(&id, true).await.unwrap();
+        let persistence_guard = manager.persistence_lock.lock().await;
+        let stopping = {
+            let manager = manager.clone();
+            let id = id.clone();
+            tokio::spawn(async move { manager.begin_stop(&id, true).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let current = manager.get(&id).await.unwrap();
+        assert_eq!(current.state, RunnerState::Online);
+        assert!(manager.is_desired_running(&id).await);
+        drop(persistence_guard);
+        stopping.await.unwrap().unwrap();
+        assert_eq!(manager.get(&id).await.unwrap().state, RunnerState::Stopping);
+        assert!(!manager.is_desired_running(&id).await);
+    }
+
+    #[tokio::test]
+    async fn test_delete_waits_for_an_admitted_stop_operation() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        manager.begin_stop_operation(&id).await.unwrap();
+        assert!(manager.begin_start_operation(&id).await.is_err());
+        assert!(manager
+            .update(
+                &id,
+                types::UpdateRunnerRequest {
+                    labels: None,
+                    mode: None,
+                    display_name: Some(Some("blocked".to_string())),
+                },
+            )
+            .await
+            .is_err());
+        manager.begin_delete_operation(&id).await.unwrap();
+
+        let waiter = {
+            let manager = manager.clone();
+            let id = id.clone();
+            tokio::spawn(async move { manager.wait_for_mutations_to_finish(&id).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        manager.finish_stop_operation(&id).await;
+        waiter.await.unwrap().unwrap();
+        manager.finish_delete_operation(&id).await;
     }
 
     #[tokio::test]
