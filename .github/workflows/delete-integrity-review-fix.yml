@@ -1,0 +1,80 @@
+name: Delete Integrity Review Fix
+
+on:
+  pull_request:
+    branches: [master]
+    types: [reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.number == 12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/delete-integrity-and-start-admission-2026-07-24
+          fetch-depth: 0
+      - name: Move deleting event after durable removal
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/daemon/src/runner/mod.rs')
+          text = path.read_text(encoding='utf-8')
+          old_local = '''    async fn delete_reserved(&self, id: &str) -> Result<()> {
+              self.prepare_delete_reserved(id).await?;
+              self.emit_state_event(id, "deleting");
+              self.remove_reserved(id).await
+          }
+          '''
+          new_local = '''    async fn delete_reserved(&self, id: &str) -> Result<()> {
+              self.prepare_delete_reserved(id).await?;
+              self.remove_reserved(id).await?;
+              self.emit_state_event(id, "deleting");
+              Ok(())
+          }
+          '''
+          old_full = '''        let runner = self
+              .get(id)
+              .await
+              .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+          self.emit_state_event(id, "deleting");
+
+          // Only configured runners have a GitHub registration to remove. Use the
+          '''
+          new_full = '''        let runner = self
+              .get(id)
+              .await
+              .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+
+          // Only configured runners have a GitHub registration to remove. Use the
+          '''
+          old_end = '''        self.remove_reserved(id).await
+      }
+      '''
+          new_end = '''        self.remove_reserved(id).await?;
+          self.emit_state_event(id, "deleting");
+          Ok(())
+      }
+      '''
+          for old, new, name in [
+              (old_local, new_local, 'local delete'),
+              (old_full, new_full, 'full delete event'),
+              (old_end, new_end, 'full delete completion'),
+          ]:
+              if text.count(old) != 1:
+                  raise RuntimeError(f'unexpected {name} shape: {text.count(old)} matches')
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit review fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/daemon/src/runner/mod.rs
+          git commit -m "fix: publish deletion event only after durable removal"
+          git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
