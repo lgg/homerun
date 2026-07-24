@@ -18,7 +18,7 @@ jobs:
           ref: audit/delete-integrity-and-start-admission-2026-07-24
       - name: Inspect structural patch boundaries
         run: |
-          python - <<'PY'
+          python - <<'PY' > diagnostic.txt
           from pathlib import Path
 
           checks = {
@@ -51,3 +51,9 @@ jobs:
               for needle in needles:
                   print(repr(needle), 'count=', text.count(needle), 'index=', text.find(needle))
           PY
+          cat diagnostic.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delete-auth-boundaries
+          path: diagnostic.txt
+          retention-days: 1
