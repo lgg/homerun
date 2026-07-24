@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: deep-audit-lifecycle
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-and-publish:
