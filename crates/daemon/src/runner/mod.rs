@@ -1706,7 +1706,9 @@ impl RunnerManager {
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-        if already_configured(&runner.config.work_dir) {
+        if runner.config.work_dir.join(".runner").exists()
+            || runner.config.work_dir.join(".runner_migrated").exists()
+        {
             bail!("Authentication required to deregister configured runner before deletion");
         }
         self.prepare_delete_reserved(id).await?;
