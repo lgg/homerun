@@ -207,7 +207,7 @@ where
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
-fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String>> {
+pub(crate) fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String>> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -224,28 +224,6 @@ fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String
     }
 
     Ok(Some(trimmed.to_string()))
-}
-
-impl super::RunnerManager {
-    /// Update only the local HomeRun alias. The GitHub-registered runner name remains untouched.
-    pub async fn update_display_name(
-        &self,
-        id: &str,
-        value: Option<String>,
-    ) -> anyhow::Result<RunnerInfo> {
-        let display_name = normalize_display_name(value)?;
-        let updated = {
-            let mut runners = self.runners.write().await;
-            let runner = runners
-                .get_mut(id)
-                .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-            runner.config.display_name = display_name;
-            runner.clone()
-        };
-
-        self.save_to_disk().await?;
-        Ok(updated)
-    }
 }
 
 #[cfg(test)]

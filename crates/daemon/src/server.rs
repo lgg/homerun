@@ -258,24 +258,31 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
         .preferences
         .start_runners_on_launch;
     if restore && !need_restart.is_empty() {
-        if let Some(token) = state.auth.token().await {
-            tracing::info!(
-                "Restoring {} previously-running runner(s)",
-                need_restart.len()
+        let token = state.auth.token().await;
+        tracing::info!(
+            "Restoring {} previously-running runner(s)",
+            need_restart.len()
+        );
+        if token.is_none() {
+            tracing::warn!(
+                "Cannot restore runners immediately: no auth token is available; recovery will retry after sign-in"
             );
-            for runner_id in need_restart {
-                let manager = state.runner_manager.clone();
-                let tok = token.clone();
+        }
+
+        for runner_id in need_restart {
+            let manager = state.runner_manager.clone();
+            if let Some(token) = token.clone() {
                 tokio::spawn(async move {
                     if let Err(e) = manager
                         .update_state(&runner_id, crate::runner::state::RunnerState::Registering)
                         .await
                     {
                         tracing::error!("Failed to transition runner {}: {}", runner_id, e);
+                        manager.schedule_recovery(runner_id);
                         return;
                     }
                     if let Err(e) = manager
-                        .register_and_start_from_registering(&runner_id, &tok)
+                        .register_and_start_from_registering(&runner_id, &token)
                         .await
                     {
                         tracing::error!("Failed to restore runner {}: {}", runner_id, e);
@@ -286,11 +293,12 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
                                 Some(format!("{e:#}")),
                             )
                             .await;
+                        manager.schedule_recovery(runner_id);
                     }
                 });
+            } else {
+                manager.schedule_recovery(runner_id);
             }
-        } else {
-            tracing::warn!("Cannot restore runners: no auth token available. Sign in and restart.");
         }
     }
 

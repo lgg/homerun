@@ -391,7 +391,9 @@ function RunnerRow({
             {!indented && runner.config.mode === "service" && <SvcBadge />}
             <span
               className="font-mono"
-              title={runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined}
+              title={
+                runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined
+              }
               style={{
                 fontSize: 14,
                 fontWeight: 500,
@@ -410,7 +412,7 @@ function RunnerRow({
                 fontSize: 11,
                 color: "var(--text-secondary)",
                 marginTop: 1,
-                paddingLeft: runner.config.mode === "service" ? 32 : 0,
+                paddingLeft: indented ? 28 : runner.config.mode === "service" ? 32 : 0,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
