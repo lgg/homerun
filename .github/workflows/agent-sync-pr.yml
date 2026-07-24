@@ -110,6 +110,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -f apps/desktop/src-tauri/binaries/homerund-x86_64-unknown-linux-gnu
+          rmdir apps/desktop/src-tauri/binaries 2>/dev/null || true
           git add -A
           git commit -m "merge: sync upstream master and harden window/runner lifecycle [sync-complete]"
           git push origin HEAD:${{ github.head_ref }}
