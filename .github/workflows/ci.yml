@@ -26,7 +26,7 @@ jobs:
     # Never execute untrusted fork code on the persistent self-hosted machine.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     name: Full quality gate
-    runs-on: homerun-ci
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 90
     defaults:
       run:
