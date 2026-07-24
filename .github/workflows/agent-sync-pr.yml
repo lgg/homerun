@@ -34,6 +34,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          LOCAL_HEAD_SHA="$(git rev-parse HEAD)"
           LOCAL_BASE_SHA="$(git merge-base HEAD origin/master)"
           git remote add upstream https://github.com/aGallea/homerun.git
           git fetch upstream master
@@ -46,6 +47,17 @@ jobs:
           git apply --check .github/maintenance/homerun-source-fixes.patch
           git apply .github/maintenance/homerun-source-fixes.patch
           cargo fmt --all
+
+          # GITHUB_TOKEN cannot push workflow-file mutations. Keep the first-parent
+          # workflow tree unchanged; the GitHub App applies the reviewed upstream
+          # workflow files immediately after this merge commit is published.
+          git checkout "$LOCAL_HEAD_SHA" -- \
+            .github/workflows/ci.yml \
+            .github/workflows/coverage-badge.yml \
+            .github/workflows/release-build.yml \
+            .github/workflows/release-please.yml
+          git rm -f --ignore-unmatch .github/workflows/docker-runner-image.yml
+
           git add -A
           git commit -m "merge: sync upstream master and harden window/runner lifecycle [sync-complete]"
 
