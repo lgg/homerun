@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: agent-sync-upstream-stability-pr
@@ -36,30 +37,50 @@ jobs:
 
       - name: Merge upstream and apply fixes
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set +e
+          (
+            set -euo pipefail
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          LOCAL_BASE_SHA="$(git merge-base HEAD origin/master)"
-          git remote add upstream https://github.com/aGallea/homerun.git
-          git fetch upstream master
-          git merge --no-commit --no-ff -X theirs upstream/master
+            LOCAL_BASE_SHA="$(git merge-base HEAD origin/master)"
+            git remote add upstream https://github.com/aGallea/homerun.git
+            git fetch upstream master
+            git merge --no-commit --no-ff -X theirs upstream/master
 
-          git checkout "$LOCAL_BASE_SHA" -- \
-            apps/desktop/src/components/RunnerTable.tsx \
-            apps/desktop/src/pages/RunnerDetail.tsx
+            git checkout "$LOCAL_BASE_SHA" -- \
+              apps/desktop/src/components/RunnerTable.tsx \
+              apps/desktop/src/pages/RunnerDetail.tsx
 
-          SCRIPT_GZIP_B64="$(sed -n 's/^      SCRIPT_GZIP_B64: //p' .github/workflows/agent-sync-upstream.yml)"
-          test -n "$SCRIPT_GZIP_B64"
-          mkdir -p .github/maintenance
-          printf '%s' "$SCRIPT_GZIP_B64" | base64 --decode | gzip --decompress > .github/maintenance/agent_sync_and_fix.py
-          python .github/maintenance/agent_sync_and_fix.py
-          cargo fmt --all
+            SCRIPT_GZIP_B64="$(sed -n 's/^      SCRIPT_GZIP_B64: //p' .github/workflows/agent-sync-upstream.yml)"
+            test -n "$SCRIPT_GZIP_B64"
+            mkdir -p .github/maintenance
+            printf '%s' "$SCRIPT_GZIP_B64" | base64 --decode | gzip --decompress > .github/maintenance/agent_sync_and_fix.py
+            python .github/maintenance/agent_sync_and_fix.py
+            cargo fmt --all
 
-          rm -rf .github/maintenance
-          rm -f .github/workflows/agent-sync-upstream.yml .github/workflows/agent-sync-pr.yml
-          git add -A
+            rm -rf .github/maintenance
+            rm -f .github/workflows/agent-sync-upstream.yml .github/workflows/agent-sync-pr.yml
+            git add -A
+          ) > /tmp/sync-step.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### Upstream sync diagnostic'
+              echo
+              echo '```text'
+              tail -n 120 /tmp/sync-step.log
+              echo '```'
+            } > /tmp/sync-comment.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/sync-comment.md
+            cat /tmp/sync-step.log
+            exit "$status"
+          fi
+          cat /tmp/sync-step.log
 
       - name: Install frontend dependencies
         working-directory: apps/desktop
