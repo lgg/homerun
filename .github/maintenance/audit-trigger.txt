@@ -1,1 +1,1 @@
-Trigger final hosted validation for committed post-merge audit source.
+Trigger final Linux and Windows validation after semantic audit corrections.
