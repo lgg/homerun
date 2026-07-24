@@ -24,12 +24,28 @@ jobs:
           components: rustfmt
 
       - name: Apply audited corrections
-        run: python .github/scripts/apply-post-merge-transaction-audit.py
+        id: apply
+        shell: bash
+        run: |
+          set +e
+          python .github/scripts/apply-post-merge-transaction-audit.py > audit-transform.log 2>&1
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Upload transform report
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-transform-report
+          path: audit-transform.log
+          retention-days: 1
 
       - name: Format Rust source
+        if: ${{ steps.apply.outputs.status == '0' }}
         run: cargo fmt --all
 
       - name: Commit audited source
+        if: ${{ steps.apply.outputs.status == '0' }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -38,6 +54,21 @@ jobs:
           git diff --cached --check
           git commit -m "fix: make runner lifecycle persistence transactional"
           git push origin HEAD:audit/post-merge-transactional-lifecycle-2026-07-24
+
+      - name: Fail unsuccessful transform
+        if: ${{ steps.apply.outputs.status != '0' }}
+        run: exit "${{ steps.apply.outputs.status }}"
+
+  report-transform:
+    needs: prepare
+    if: ${{ always() && needs.prepare.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-transform-report
+      - name: Print exact transform failure
+        run: cat audit-transform.log
 
   validate-linux:
     needs: prepare
