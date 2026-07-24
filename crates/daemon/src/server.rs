@@ -274,28 +274,32 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
             let manager = state.runner_manager.clone();
             if let Some(token) = token.clone() {
                 tokio::spawn(async move {
-                    if let Err(e) = manager
-                        .update_state(&runner_id, crate::runner::state::RunnerState::Registering)
-                        .await
-                    {
-                        tracing::error!("Failed to transition runner {}: {}", runner_id, e);
+                    if let Err(error) = manager.begin_start_operation(&runner_id).await {
+                        tracing::warn!(
+                            runner = %runner_id,
+                            error = %error,
+                            "Startup restore deferred by another lifecycle operation"
+                        );
                         manager.schedule_recovery(runner_id);
                         return;
                     }
-                    if let Err(e) = manager
-                        .register_and_start_from_registering(&runner_id, &token)
-                        .await
-                    {
-                        tracing::error!("Failed to restore runner {}: {}", runner_id, e);
+
+                    if let Err(error) = manager.start_existing_reserved(&runner_id, &token).await {
+                        tracing::error!(
+                            runner = %runner_id,
+                            error = %error,
+                            "Failed to restore runner"
+                        );
                         let _ = manager
                             .update_state_with_error(
                                 &runner_id,
                                 crate::runner::state::RunnerState::Error,
-                                Some(format!("{e:#}")),
+                                Some(format!("{error:#}")),
                             )
                             .await;
-                        manager.schedule_recovery(runner_id);
+                        manager.schedule_recovery(runner_id.clone());
                     }
+                    manager.finish_start_operation(&runner_id).await;
                 });
             } else {
                 manager.schedule_recovery(runner_id);
