@@ -32,6 +32,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
+      - name: Prettier check
+        working-directory: apps/desktop
+        run: npx --yes prettier@3.9.5 --check package.json scripts/prepare-sidecar.mjs
       - name: Frontend tests
         working-directory: apps/desktop
         run: npm test
