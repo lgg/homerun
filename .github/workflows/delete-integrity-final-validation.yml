@@ -6,106 +6,11 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  prepare:
-    if: github.event.pull_request.number == 12
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: audit/delete-integrity-and-start-admission-2026-07-24
-          fetch-depth: 0
-      - name: Apply final reviewed fixes
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path('crates/daemon/src/runner/mod.rs')
-          text = path.read_text(encoding='utf-8')
-          local_old = '''        self.emit_state_event(id, "deleting");
-                  self.remove_reserved(id).await
-          '''
-          local_new = '''        self.remove_reserved(id).await?;
-                  self.emit_state_event(id, "deleting");
-                  Ok(())
-          '''
-          local_start = text.index('    async fn delete_reserved(&self, id: &str) -> Result<()> {')
-          local_end = text.index('\n    pub async fn update(', local_start)
-          local_block = text[local_start:local_end]
-          if local_old in local_block:
-              local_block = local_block.replace(local_old, local_new, 1)
-          elif local_new not in local_block:
-              raise RuntimeError('unexpected local delete shape')
-          text = text[:local_start] + local_block + text[local_end:]
-
-          full_start = text.index('    async fn full_delete_reserved(&self, id: &str, auth_token: &str) -> Result<()> {')
-          full_end = text.index('\n    fn emit_state_event(', full_start)
-          full_block = text[full_start:full_end]
-          early_event = '        self.emit_state_event(id, "deleting");\n\n'
-          if early_event in full_block:
-              full_block = full_block.replace(early_event, '', 1)
-          full_old = '        self.remove_reserved(id).await\n'
-          full_new = '''        self.remove_reserved(id).await?;
-                  self.emit_state_event(id, "deleting");
-                  Ok(())
-          '''
-          if full_old in full_block:
-              full_block = full_block.replace(full_old, full_new, 1)
-          elif full_new not in full_block:
-              raise RuntimeError('unexpected full delete completion shape')
-          text = text[:full_start] + full_block + text[full_end:]
-          path.write_text(text, encoding='utf-8')
-
-          docker_path = Path('crates/daemon/src/runner/docker.rs')
-          docker_text = docker_path.read_text(encoding='utf-8')
-          test_start = docker_text.index('    /// `deregister` is documented as best-effort:') if '    /// `deregister` is documented as best-effort:' in docker_text else docker_text.index('    /// `deregister` must surface Docker failures')
-          test_end = docker_text.index('\n    }\n}', test_start) + len('\n    }')
-          test_block = docker_text[test_start:test_end]
-          old_doc = '''    /// `deregister` is documented as best-effort: it must never fail the
-              /// caller even when Docker is unreachable — it should log a warning
-              /// and return `Ok(())` so a broken GitHub-side deregistration never
-              /// blocks deleting a runner locally.
-          '''
-          new_doc = '''    /// `deregister` must surface Docker failures so callers retain the local
-              /// runner and can retry instead of silently leaving a stale GitHub runner.
-          '''
-          if old_doc in test_block:
-              test_block = test_block.replace(old_doc, new_doc, 1)
-          if 'test_deregister_is_best_effort_without_daemon' in test_block:
-              test_block = test_block.replace(
-                  'test_deregister_is_best_effort_without_daemon',
-                  'test_deregister_fails_without_daemon',
-                  1,
-              )
-          if 'assert!(result.is_ok());' in test_block:
-              test_block = test_block.replace('assert!(result.is_ok());', 'assert!(result.is_err());', 1)
-          if 'test_deregister_fails_without_daemon' not in test_block or 'assert!(result.is_err());' not in test_block:
-              raise RuntimeError('unexpected deregistration test shape')
-          docker_text = docker_text[:test_start] + test_block + docker_text[test_end:]
-          docker_path.write_text(docker_text, encoding='utf-8')
-
-          trigger = Path('.github/delete-integrity-review-trigger')
-          if trigger.exists():
-              trigger.unlink()
-          PY
-          cargo fmt --all
-          git diff --check
-      - name: Publish reviewed fixes when needed
-        run: |
-          if git diff --quiet; then
-            echo "No review fix required"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/daemon/src/runner/mod.rs crates/daemon/src/runner/docker.rs
-          git commit -m "test: enforce strict runner deregistration failures"
-          git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
-
   linux:
-    needs: prepare
+    if: github.event.pull_request.number == 12
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -144,11 +49,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Release daemon build
         run: cargo build -p homerund --release
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
       - name: Linux Tauri check
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
   windows:
-    needs: prepare
+    if: github.event.pull_request.number == 12
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
@@ -183,5 +91,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Release daemon build
         run: cargo build -p homerund --release
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
       - name: Windows Tauri check
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
