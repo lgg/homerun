@@ -77,6 +77,12 @@ struct ProcessHandle {
     exited: watch::Receiver<bool>,
 }
 
+#[derive(Default)]
+struct LifecycleOperations {
+    starting: HashSet<String>,
+    deleting: HashSet<String>,
+}
+
 #[derive(Clone)]
 pub struct RunnerManager {
     config: Arc<Config>,
@@ -92,9 +98,12 @@ pub struct RunnerManager {
     desired_running: Arc<RwLock<HashSet<String>>>,
     /// Prevent duplicate recovery loops for the same runner.
     recovering: Arc<Mutex<HashSet<String>>>,
-    /// Runner IDs currently inside the registration/start pipeline. Deletion
-    /// waits for this pipeline to finish before touching the work directory.
-    starting: Arc<RwLock<HashSet<String>>>,
+    /// Coordinate start and delete reservations under one lock. A deletion
+    /// blocks new starts before waiting for an already-running start pipeline.
+    lifecycle_operations: Arc<Mutex<LifecycleOperations>>,
+    /// Serialize configuration PATCH operations through their persistence commit,
+    /// so a failed write can never roll back a newer same-valued update.
+    update_lock: Arc<Mutex<()>>,
     /// Serialize persistence writes. Multiple async lifecycle tasks can request
     /// a save concurrently, and unsynchronized writes can truncate runners.json.
     persistence_lock: Arc<Mutex<()>>,
@@ -180,7 +189,8 @@ impl RunnerManager {
             auth_token: Arc::new(RwLock::new(None)),
             desired_running: Arc::new(RwLock::new(HashSet::new())),
             recovering: Arc::new(Mutex::new(HashSet::new())),
-            starting: Arc::new(RwLock::new(HashSet::new())),
+            lifecycle_operations: Arc::new(Mutex::new(LifecycleOperations::default())),
+            update_lock: Arc::new(Mutex::new(())),
             persistence_lock: Arc::new(Mutex::new(())),
             auth_manager: None,
             step_watcher: WorkerLogWatcher::new(),
@@ -1227,14 +1237,22 @@ impl RunnerManager {
         {
             let mut runners = self.runners.write().await;
             if runners.values().any(|existing| {
-                existing
+                let same_name = existing
                     .config
                     .name
-                    .eq_ignore_ascii_case(&runner.config.name)
+                    .eq_ignore_ascii_case(&runner.config.name);
+                let same_repository = existing.config.repo_owner.eq_ignore_ascii_case(owner)
+                    && existing.config.repo_name.eq_ignore_ascii_case(repo);
+                let docker_name_collision = existing.config.mode == RunnerMode::Container
+                    && runner.config.mode == RunnerMode::Container;
+                same_name && (same_repository || docker_name_collision)
             }) {
                 drop(runners);
                 let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-                bail!("A runner named '{}' already exists", runner.config.name);
+                bail!(
+                    "A conflicting runner named '{}' already exists",
+                    runner.config.name
+                );
             }
             runners.insert(id.clone(), runner.clone());
         }
@@ -1524,10 +1542,40 @@ impl RunnerManager {
         self.processes.read().await.contains_key(id)
     }
 
+    async fn begin_start_operation(&self, id: &str) -> Result<()> {
+        let mut operations = self.lifecycle_operations.lock().await;
+        if operations.deleting.contains(id) {
+            bail!("Runner '{id}' is being deleted");
+        }
+        if !operations.starting.insert(id.to_string()) {
+            bail!("Runner '{id}' already has a start operation in progress");
+        }
+        Ok(())
+    }
+
+    async fn finish_start_operation(&self, id: &str) {
+        self.lifecycle_operations.lock().await.starting.remove(id);
+    }
+
+    async fn begin_delete_operation(&self, id: &str) -> Result<()> {
+        if !self.runners.read().await.contains_key(id) {
+            bail!("Runner not found");
+        }
+        let mut operations = self.lifecycle_operations.lock().await;
+        if !operations.deleting.insert(id.to_string()) {
+            bail!("Runner '{id}' already has a deletion in progress");
+        }
+        Ok(())
+    }
+
+    async fn finish_delete_operation(&self, id: &str) {
+        self.lifecycle_operations.lock().await.deleting.remove(id);
+    }
+
     async fn wait_for_start_to_finish(&self, id: &str) -> Result<()> {
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
             loop {
-                if !self.starting.read().await.contains(id) {
+                if !self.lifecycle_operations.lock().await.starting.contains(id) {
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1541,6 +1589,13 @@ impl RunnerManager {
     }
 
     pub async fn delete(&self, id: &str) -> Result<()> {
+        self.begin_delete_operation(id).await?;
+        let result = self.delete_reserved(id).await;
+        self.finish_delete_operation(id).await;
+        result
+    }
+
+    async fn delete_reserved(&self, id: &str) -> Result<()> {
         // Cancel future recovery first, then wait until any in-flight registration
         // no longer uses the work directory. If it managed to start a process,
         // stop that process before removing files.
@@ -1570,13 +1625,14 @@ impl RunnerManager {
     }
 
     pub async fn update(&self, id: &str, req: types::UpdateRunnerRequest) -> Result<RunnerInfo> {
+        let _update_guard = self.update_lock.lock().await;
         let normalized_labels = req.labels.map(types::normalize_labels).transpose()?;
         let requested_mode = req.mode;
         let display_name = match req.display_name {
             Some(value) => Some(types::normalize_display_name(value)?),
             None => None,
         };
-        let start_in_progress = self.starting.read().await.contains(id);
+        let start_in_progress = self.lifecycle_operations.lock().await.starting.contains(id);
 
         let previous = {
             let mut runners = self.runners.write().await;
@@ -1699,12 +1755,7 @@ impl RunnerManager {
     /// 7. Store PID, update state to Online
     /// 8. Spawn background monitor task
     pub async fn register_and_start(&self, id: &str, auth_token: &str) -> Result<()> {
-        {
-            let mut starting = self.starting.write().await;
-            if !starting.insert(id.to_string()) {
-                bail!("Runner '{id}' already has a start operation in progress");
-            }
-        }
+        self.begin_start_operation(id).await?;
 
         let result = async {
             self.set_desired_running(id, true).await?;
@@ -1714,7 +1765,7 @@ impl RunnerManager {
             self.do_register_and_start(id, auth_token).await
         }
         .await;
-        self.starting.write().await.remove(id);
+        self.finish_start_operation(id).await;
         result
     }
 
@@ -1725,12 +1776,7 @@ impl RunnerManager {
         id: &str,
         auth_token: &str,
     ) -> Result<()> {
-        {
-            let mut starting = self.starting.write().await;
-            if !starting.insert(id.to_string()) {
-                bail!("Runner '{id}' already has a start operation in progress");
-            }
-        }
+        self.begin_start_operation(id).await?;
 
         let result = async {
             self.set_desired_running(id, true).await?;
@@ -1738,7 +1784,7 @@ impl RunnerManager {
             self.do_register_and_start(id, auth_token).await
         }
         .await;
-        self.starting.write().await.remove(id);
+        self.finish_start_operation(id).await;
         result
     }
 
@@ -2687,6 +2733,13 @@ impl RunnerManager {
 
     /// Full delete flow: stop process, deregister from GitHub, remove work dir.
     pub async fn full_delete(&self, id: &str, auth_token: &str) -> Result<()> {
+        self.begin_delete_operation(id).await?;
+        let result = self.full_delete_reserved(id, auth_token).await;
+        self.finish_delete_operation(id).await;
+        result
+    }
+
+    async fn full_delete_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
         self.get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
@@ -2737,8 +2790,8 @@ impl RunnerManager {
             }
         }
 
-        // Remove runner entry and work dir
-        self.delete(id).await?;
+        // Remove runner entry and work dir while retaining the deletion reservation.
+        self.delete_reserved(id).await?;
         Ok(())
     }
 
@@ -3113,6 +3166,83 @@ name"
         let results = [first.await.unwrap(), second.await.unwrap()];
         assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(manager.list().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_same_native_runner_name_is_allowed_across_repositories() {
+        let manager = create_test_manager();
+        manager
+            .create(
+                "owner/one",
+                Some("shared-name".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        manager
+            .create(
+                "owner/two",
+                Some("shared-name".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(manager.list().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_same_container_runner_name_is_rejected_across_repositories() {
+        let manager = create_test_manager();
+        let container = types::ContainerConfig {
+            image: "ghcr.io/agallea/homerun-runner:ubuntu-24.04".to_string(),
+            extra_env: vec![],
+        };
+        manager
+            .create(
+                "owner/one",
+                Some("shared-name".to_string()),
+                None,
+                Some(RunnerMode::Container),
+                None,
+                Some(container.clone()),
+            )
+            .await
+            .unwrap();
+        let duplicate = manager
+            .create(
+                "owner/two",
+                Some("shared-name".to_string()),
+                None,
+                Some(RunnerMode::Container),
+                None,
+                Some(container),
+            )
+            .await;
+        assert!(duplicate.is_err());
+        assert_eq!(manager.list().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_delete_reservation_blocks_new_start_operations() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        manager.begin_delete_operation(&id).await.unwrap();
+        assert!(manager.begin_start_operation(&id).await.is_err());
+        manager.finish_delete_operation(&id).await;
+
+        manager.begin_start_operation(&id).await.unwrap();
+        manager.finish_start_operation(&id).await;
     }
 
     #[tokio::test]
