@@ -1,1 +1,0 @@
-Re-run hosted Linux and Windows validation after the audited source commit.
