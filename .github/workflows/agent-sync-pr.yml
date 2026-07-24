@@ -1,4 +1,4 @@
-name: Prepare upstream merge tree
+name: Execute verified upstream merge
 
 on:
   pull_request:
@@ -6,16 +6,17 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: agent-sync-upstream-stability-pr
   cancel-in-progress: false
 
 jobs:
-  prepare-merged-tree:
+  merge-fix-test:
+    if: ${{ !contains(github.event.pull_request.title, '[sync-complete]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - name: Checkout PR branch with full history
         uses: actions/checkout@v6
@@ -23,7 +24,17 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Merge upstream source tree
+      - name: Configure Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Merge upstream and apply reviewed patch
         shell: bash
         run: |
           set -euo pipefail
@@ -33,15 +44,51 @@ jobs:
           git remote add upstream https://github.com/aGallea/homerun.git
           git fetch upstream master
           git merge --no-commit --no-ff -X theirs upstream/master
+
+          # Keep the fork's local runner-alias UI, then layer upstream Docker support onto it.
           git checkout "$LOCAL_BASE_SHA" -- \
             apps/desktop/src/components/RunnerTable.tsx \
             apps/desktop/src/pages/RunnerDetail.tsx
-          tar --exclude=.git --exclude=target --exclude=node_modules -czf /tmp/merged-source.tar.gz .
 
-      - name: Upload merged source tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: merged-source
-          path: /tmp/merged-source.tar.gz
-          if-no-files-found: error
-          retention-days: 1
+          git apply --check .github/maintenance/homerun-source-fixes.patch
+          git apply .github/maintenance/homerun-source-fixes.patch
+          cargo fmt --all
+
+          # One-shot maintenance files must not remain in the product tree.
+          rm -f .github/maintenance/homerun-source-fixes.patch
+          rmdir .github/maintenance 2>/dev/null || true
+          rm -f .github/workflows/agent-sync-upstream.yml .github/workflows/agent-sync-pr.yml
+          git add -A
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Frontend tests
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Frontend build
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev build-essential pkg-config
+
+      - name: Check Tauri Rust application
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Commit verified merge and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git commit -m "merge: sync upstream master and harden window/runner lifecycle [sync-complete]"
+          git push origin HEAD:${{ github.head_ref }}
