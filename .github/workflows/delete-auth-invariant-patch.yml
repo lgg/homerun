@@ -35,6 +35,21 @@ jobs:
           Path('/tmp/apply.py').write_text(script, encoding='utf-8')
           PY
           python /tmp/apply.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/daemon/src/runner/mod.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '        if already_configured(&runner.config.work_dir) {\n'
+          new = '''        if runner.config.work_dir.join(".runner").exists()
+              || runner.config.work_dir.join(".runner_migrated").exists()
+          {
+          '''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise RuntimeError('unexpected configured runner guard shape')
+          path.write_text(text, encoding='utf-8')
+          PY
           cargo fmt --all
           git diff --check
       - name: Commit production changes
@@ -46,5 +61,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add crates/daemon/src/runner/mod.rs crates/daemon/src/api/runners.rs crates/daemon/src/api/groups.rs
-          git commit -m "fix: require authentication before deleting configured runners"
+          git commit -m "fix: check configured runner markers before local deletion"
           git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
