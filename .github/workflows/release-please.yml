@@ -11,11 +11,10 @@ permissions:
 concurrency:
   group: homerun-ci-${{ github.repository }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
   release-please:
-    runs-on: homerun-ci
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 30
     defaults:
       run:
