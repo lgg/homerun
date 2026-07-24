@@ -1,0 +1,153 @@
+name: Post-Merge Audit Validation
+
+on:
+  push:
+    branches: [audit/post-merge-lifecycle-2026-07-24-v2]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: post-merge-audit-v2
+  cancel-in-progress: false
+
+jobs:
+  linux-audit:
+    name: Linux audit and source commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout audit branch
+        uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-lifecycle-2026-07-24-v2
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply audited source fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q "async fn begin_stop" crates/daemon/src/runner/mod.rs; then
+            echo "Audited source fixes are already applied"
+          else
+            python .github/maintenance/post-merge-audit.py
+          fi
+
+      - name: Format source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cd apps/desktop
+          npm ci
+          npx prettier --write src/components/NewRunnerWizard.tsx src/components/NewRunnerWizard.test.tsx
+
+      - name: Frontend tests
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Frontend production build
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev build-essential pkg-config
+
+      - name: Prepare Linux Tauri sidecar
+        run: |
+          cargo build -p homerund
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp target/debug/homerund apps/desktop/src-tauri/binaries/homerund-x86_64-unknown-linux-gnu
+
+      - name: Check Linux Tauri application
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Commit verified source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f apps/desktop/src-tauri/binaries/homerund-x86_64-unknown-linux-gnu
+          rmdir apps/desktop/src-tauri/binaries 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/desktop/src/components/NewRunnerWizard.tsx \
+            apps/desktop/src/components/NewRunnerWizard.test.tsx \
+            crates/daemon/src/api/runners.rs \
+            crates/daemon/src/runner/mod.rs \
+            crates/daemon/src/runner/types.rs \
+            crates/daemon/src/server.rs
+          if git diff --cached --quiet; then
+            echo "No source changes to commit"
+          else
+            git commit -m "fix: close post-merge lifecycle race conditions"
+            git push origin HEAD:audit/post-merge-lifecycle-2026-07-24-v2
+          fi
+
+  windows-audit:
+    name: Windows application validation
+    needs: linux-audit
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
+      - name: Checkout latest audit branch
+        uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-lifecycle-2026-07-24-v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Frontend tests
+        working-directory: apps/desktop
+        run: npm test
+
+      - name: Frontend production build
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+
+      - name: Prepare Windows Tauri sidecar
+        shell: pwsh
+        run: |
+          cargo build -p homerund
+          New-Item -ItemType Directory -Force -Path apps/desktop/src-tauri/binaries
+          Copy-Item target/debug/homerund.exe apps/desktop/src-tauri/binaries/homerund-x86_64-pc-windows-msvc.exe
+
+      - name: Check Windows Tauri application
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
