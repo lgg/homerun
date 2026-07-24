@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -50,5 +50,8 @@ const destination = join(
 );
 mkdirSync(destinationDir, { recursive: true });
 copyFileSync(source, destination);
+if (!isWindows) {
+  chmodSync(destination, 0o755);
+}
 
 console.log(`Prepared HomeRun sidecar: ${destination}`);
