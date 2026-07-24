@@ -1,0 +1,56 @@
+name: Post-merge Publish Test Import
+
+on:
+  pull_request:
+    branches: [master]
+    types: [reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: ${{ github.head_ref == 'audit/post-merge-transactional-lifecycle-2026-07-24' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-transactional-lifecycle-2026-07-24
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Add missing regression-test import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/daemon/src/api/groups.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''#[cfg(test)]
+          mod tests {
+              use crate::server::{create_router, AppState};
+          '''
+          new = '''#[cfg(test)]
+          mod tests {
+              use crate::runner::state::RunnerState;
+              use crate::server::{create_router, AppState};
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one tests import block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/daemon/src/api/groups.rs
+          git diff --cached --check
+          git commit -m "test: import runner state in group lifecycle regression"
+          git push origin HEAD:audit/post-merge-transactional-lifecycle-2026-07-24
