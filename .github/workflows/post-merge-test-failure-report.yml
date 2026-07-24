@@ -1,0 +1,53 @@
+name: Post-merge Test Failure Report
+
+on:
+  pull_request:
+    branches: [master]
+    types: [reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    if: ${{ github.head_ref == 'audit/post-merge-transactional-lifecycle-2026-07-24' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-transactional-lifecycle-2026-07-24
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture exact workspace failure
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-targets --quiet > workspace-test.log 2>&1
+          status=$?
+          set -e
+          echo "$status" > workspace-test.status
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-report-final
+          path: |
+            workspace-test.log
+            workspace-test.status
+          retention-days: 1
+
+  report:
+    needs: capture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: workspace-test-report-final
+      - name: Print exact workspace failure
+        shell: bash
+        run: |
+          status=$(cat workspace-test.status)
+          if [[ "$status" != "0" ]]; then
+            grep -nE 'FAILED|failures:|panicked at|error: test failed|thread .* panicked' workspace-test.log || true
+            tail -n 140 workspace-test.log
+            exit "$status"
+          fi
+          echo "Workspace tests passed"
