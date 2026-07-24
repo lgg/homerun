@@ -60,6 +60,11 @@ export function NewRunnerWizard({
   // re-entrant renders and an intermittently disappearing wizard.
   useEffect(() => {
     if (!preselectedRepo) {
+      if (resolvedPreselectFor !== null) {
+        setSelectedRepo(null);
+        setName("");
+        setStep(0);
+      }
       setResolvedPreselectFor(null);
       return;
     }

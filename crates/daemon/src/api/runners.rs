@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_runner_rejects_mode_change() {
+    async fn test_update_runner_native_mode_while_stopped() {
         let state = AppState::new_test_authenticated();
         let id = create_runner_and_get_id(&state).await;
 
@@ -851,7 +851,13 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated["config"]["mode"], "service");
     }
 
     #[tokio::test]

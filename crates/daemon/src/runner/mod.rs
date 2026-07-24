@@ -1564,6 +1564,7 @@ impl RunnerManager {
 
     pub async fn update(&self, id: &str, req: types::UpdateRunnerRequest) -> Result<RunnerInfo> {
         let normalized_labels = req.labels.map(types::normalize_labels).transpose()?;
+        let requested_mode = req.mode;
         let display_name = match req.display_name {
             Some(value) => Some(types::normalize_display_name(value)?),
             None => None,
@@ -1576,26 +1577,34 @@ impl RunnerManager {
                 .get_mut(id)
                 .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
 
-            if let Some(requested_mode) = req.mode {
-                if requested_mode != runner.config.mode {
-                    bail!(
-                        "Runner mode cannot be changed after creation; create a new runner instead"
-                    );
+            let stopped = matches!(
+                runner.state,
+                RunnerState::Creating | RunnerState::Offline | RunnerState::Error
+            );
+            if let Some(ref requested_mode) = requested_mode {
+                if requested_mode != &runner.config.mode {
+                    if start_in_progress || !stopped {
+                        bail!("Runner mode can only be changed while the runner is stopped");
+                    }
+                    if *requested_mode == RunnerMode::Container
+                        || runner.config.mode == RunnerMode::Container
+                    {
+                        bail!(
+                            "Container execution mode cannot be changed after creation; create a new runner instead"
+                        );
+                    }
                 }
             }
-            if normalized_labels.is_some()
-                && (start_in_progress
-                    || !matches!(
-                        runner.state,
-                        RunnerState::Creating | RunnerState::Offline | RunnerState::Error
-                    ))
-            {
+            if normalized_labels.is_some() && (start_in_progress || !stopped) {
                 bail!("Runner labels can only be changed while the runner is stopped");
             }
 
             let previous = runner.clone();
             if let Some(labels) = normalized_labels {
                 runner.config.labels = labels;
+            }
+            if let Some(requested_mode) = requested_mode {
+                runner.config.mode = requested_mode;
             }
             if let Some(display_name) = display_name {
                 runner.config.display_name = display_name;
@@ -1713,6 +1722,15 @@ impl RunnerManager {
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+        if runner.state != RunnerState::Registering {
+            bail!(
+                "Runner '{id}' must be Registering before start, found {:?}",
+                runner.state
+            );
+        }
+        if self.has_active_process(id).await {
+            bail!("Runner '{id}' already has an active process");
+        }
         let config = &runner.config;
 
         // Check both .runner and .runner_migrated (newer runner versions rename
@@ -3108,6 +3126,18 @@ name"
             )
             .await;
         assert!(label_result.is_err());
+
+        let mode_result = manager
+            .update(
+                &id,
+                types::UpdateRunnerRequest {
+                    labels: None,
+                    mode: Some(RunnerMode::Service),
+                    display_name: None,
+                },
+            )
+            .await;
+        assert!(mode_result.is_err());
     }
 
     #[tokio::test]
@@ -3406,7 +3436,7 @@ name"
     }
 
     #[tokio::test]
-    async fn test_update_rejects_mode_change() {
+    async fn test_update_native_mode_while_stopped() {
         let dir = tempfile::tempdir().unwrap();
         let config = Config::with_base_dir(dir.path().join(".homerun"));
         config.ensure_dirs().unwrap();
@@ -3418,7 +3448,7 @@ name"
             .unwrap();
         let id = runner.config.id.clone();
 
-        let result = manager
+        let updated = manager
             .update(
                 &id,
                 crate::runner::types::UpdateRunnerRequest {
@@ -3427,11 +3457,13 @@ name"
                     display_name: None,
                 },
             )
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_err());
-        let unchanged = manager.get(&id).await.unwrap();
-        assert_eq!(unchanged.config.mode, crate::runner::types::RunnerMode::App);
+        assert_eq!(
+            updated.config.mode,
+            crate::runner::types::RunnerMode::Service
+        );
     }
 
     #[tokio::test]
