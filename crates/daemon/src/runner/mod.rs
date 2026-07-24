@@ -1702,8 +1702,9 @@ impl RunnerManager {
 
     async fn delete_reserved(&self, id: &str) -> Result<()> {
         self.prepare_delete_reserved(id).await?;
+        self.remove_reserved(id).await?;
         self.emit_state_event(id, "deleting");
-        self.remove_reserved(id).await
+        Ok(())
     }
 
     pub async fn update(&self, id: &str, req: types::UpdateRunnerRequest) -> Result<RunnerInfo> {
@@ -2844,8 +2845,6 @@ impl RunnerManager {
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-        self.emit_state_event(id, "deleting");
-
         // Only configured runners have a GitHub registration to remove. Use the
         // dedicated removal token and propagate failures so local deletion never
         // silently leaves a stale remote runner behind.
@@ -2870,7 +2869,9 @@ impl RunnerManager {
             }
         }
 
-        self.remove_reserved(id).await
+        self.remove_reserved(id).await?;
+        self.emit_state_event(id, "deleting");
+        Ok(())
     }
 
     fn emit_state_event(&self, runner_id: &str, state: &str) {
