@@ -17,13 +17,13 @@ jobs:
         with:
           ref: audit/delete-integrity-and-start-admission-2026-07-24
           fetch-depth: 0
-      - name: Apply final reviewed event ordering
+      - name: Apply final reviewed fixes
         run: |
           python - <<'PY'
           from pathlib import Path
+
           path = Path('crates/daemon/src/runner/mod.rs')
           text = path.read_text(encoding='utf-8')
-
           local_old = '''        self.emit_state_event(id, "deleting");
                   self.remove_reserved(id).await
           '''
@@ -56,15 +56,43 @@ jobs:
           elif full_new not in full_block:
               raise RuntimeError('unexpected full delete completion shape')
           text = text[:full_start] + full_block + text[full_end:]
-
           path.write_text(text, encoding='utf-8')
+
+          docker_path = Path('crates/daemon/src/runner/docker.rs')
+          docker_text = docker_path.read_text(encoding='utf-8')
+          test_start = docker_text.index('    /// `deregister` is documented as best-effort:') if '    /// `deregister` is documented as best-effort:' in docker_text else docker_text.index('    /// `deregister` must surface Docker failures')
+          test_end = docker_text.index('\n    }\n}', test_start) + len('\n    }')
+          test_block = docker_text[test_start:test_end]
+          old_doc = '''    /// `deregister` is documented as best-effort: it must never fail the
+              /// caller even when Docker is unreachable — it should log a warning
+              /// and return `Ok(())` so a broken GitHub-side deregistration never
+              /// blocks deleting a runner locally.
+          '''
+          new_doc = '''    /// `deregister` must surface Docker failures so callers retain the local
+              /// runner and can retry instead of silently leaving a stale GitHub runner.
+          '''
+          if old_doc in test_block:
+              test_block = test_block.replace(old_doc, new_doc, 1)
+          if 'test_deregister_is_best_effort_without_daemon' in test_block:
+              test_block = test_block.replace(
+                  'test_deregister_is_best_effort_without_daemon',
+                  'test_deregister_fails_without_daemon',
+                  1,
+              )
+          if 'assert!(result.is_ok());' in test_block:
+              test_block = test_block.replace('assert!(result.is_ok());', 'assert!(result.is_err());', 1)
+          if 'test_deregister_fails_without_daemon' not in test_block or 'assert!(result.is_err());' not in test_block:
+              raise RuntimeError('unexpected deregistration test shape')
+          docker_text = docker_text[:test_start] + test_block + docker_text[test_end:]
+          docker_path.write_text(docker_text, encoding='utf-8')
+
           trigger = Path('.github/delete-integrity-review-trigger')
           if trigger.exists():
               trigger.unlink()
           PY
           cargo fmt --all
           git diff --check
-      - name: Publish review fix when needed
+      - name: Publish reviewed fixes when needed
         run: |
           if git diff --quiet; then
             echo "No review fix required"
@@ -72,8 +100,8 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A crates/daemon/src/runner/mod.rs .github/delete-integrity-review-trigger
-          git commit -m "fix: publish deletion event only after durable removal"
+          git add -A crates/daemon/src/runner/mod.rs crates/daemon/src/runner/docker.rs .github/delete-integrity-review-trigger
+          git commit -m "test: enforce strict runner deregistration failures"
           git push origin HEAD:audit/delete-integrity-and-start-admission-2026-07-24
 
   linux:
