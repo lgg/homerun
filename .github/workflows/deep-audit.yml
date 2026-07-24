@@ -61,6 +61,14 @@ jobs:
             git apply --reverse --check --verbose /tmp/deep-audit-source.patch || true
             exit 1
           fi
+          if git apply --check .github/maintenance/deep-audit-followup.patch; then
+            git apply .github/maintenance/deep-audit-followup.patch
+          elif git apply --reverse --check .github/maintenance/deep-audit-followup.patch; then
+            echo "Follow-up patch is already applied"
+          else
+            echo "Follow-up patch no longer applies cleanly" >&2
+            exit 1
+          fi
 
       - name: Format and inspect source diff
         shell: bash
