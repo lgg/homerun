@@ -1,0 +1,23 @@
+name: CI Actionlint Diagnostic
+
+on:
+  pull_request:
+    branches: [master]
+    types: [reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    if: github.event.pull_request.number == 12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/delete-integrity-and-start-admission-2026-07-24
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Validate CI workflow
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest -color .github/workflows/ci.yml
