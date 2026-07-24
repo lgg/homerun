@@ -17,6 +17,7 @@ jobs:
         with:
           ref: agent/final-deep-audit-2026-07-24
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -36,7 +37,9 @@ jobs:
           git add .github/workflows/ci.yml .github/workflows/coverage-badge.yml .github/workflows/release-please.yml crates/daemon/src/runner/mod.rs
           git diff --cached --check
           git commit -m "fix: close final lifecycle and workflow audit gaps"
-          git push origin HEAD:agent/final-deep-audit-2026-07-24
+
+      - name: Push staged audit result
+        run: git push origin HEAD:agent/final-deep-audit-2026-07-24
 
   validate-linux:
     needs: prepare
@@ -157,6 +160,7 @@ jobs:
         with:
           ref: agent/final-deep-audit-2026-07-24
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Remove temporary audit machinery
         run: |
@@ -168,4 +172,6 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m "chore: remove temporary final audit workflow"
-          git push origin HEAD:agent/final-deep-audit-2026-07-24
+
+      - name: Push cleanup commit
+        run: git push origin HEAD:agent/final-deep-audit-2026-07-24
