@@ -3,7 +3,7 @@ name: PR 12 Create Intent Patch
 on:
   pull_request:
     branches: [master]
-    types: [reopened]
+    types: [reopened, synchronize]
 
 permissions:
   contents: write
@@ -28,8 +28,28 @@ jobs:
           python /tmp/apply.py
           cargo fmt --all
           git diff --check
+      - name: Capture focused daemon tests
+        shell: bash
+        run: |
+          set +e
+          cargo test -p homerund --lib > /tmp/create-intent-tests.log 2>&1
+          echo "$?" > /tmp/create-intent-tests.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr12-create-intent-tests
+          path: |
+            /tmp/create-intent-tests.log
+            /tmp/create-intent-tests.status
+          retention-days: 1
       - name: Verify focused daemon tests
-        run: cargo test -p homerund --lib
+        run: |
+          status=$(cat /tmp/create-intent-tests.status)
+          if [[ "$status" != "0" ]]; then
+            grep -nE 'error\[|error:|FAILED|panicked at|failures:' /tmp/create-intent-tests.log || true
+            tail -n 200 /tmp/create-intent-tests.log
+          fi
+          exit "$status"
       - name: Commit reviewed patch
         run: |
           if git diff --quiet; then
