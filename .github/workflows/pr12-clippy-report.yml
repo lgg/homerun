@@ -1,0 +1,37 @@
+name: PR 12 Clippy Report
+
+on:
+  pull_request:
+    branches: [master]
+    types: [reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    if: github.event.pull_request.number == 12
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/delete-integrity-and-start-admission-2026-07-24
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Capture Clippy diagnostics
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets --all-features -- -D warnings > /tmp/clippy.log 2>&1
+          echo "$?" > /tmp/clippy.status
+          grep -nE '^error:|warning:|--> |help:' /tmp/clippy.log > /tmp/clippy-focused.log || true
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr12-clippy-report
+          path: |
+            /tmp/clippy-focused.log
+            /tmp/clippy.status
+          retention-days: 1
