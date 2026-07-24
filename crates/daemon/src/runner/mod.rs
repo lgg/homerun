@@ -559,6 +559,17 @@ impl RunnerManager {
     /// (these need to be restarted if the restore preference is enabled).
     pub async fn load_from_disk(&self) -> Result<Vec<String>> {
         let path = self.config.runners_json_path();
+        #[cfg(windows)]
+        if !path.exists() {
+            let backup_path = path.with_extension("json.bak");
+            if backup_path.exists() {
+                tracing::warn!(
+                    "Recovering runner state from interrupted Windows swap: {}",
+                    backup_path.display()
+                );
+                std::fs::rename(&backup_path, &path).context("restoring backed-up runner state")?;
+            }
+        }
         if !path.exists() {
             return Ok(Vec::new());
         }
@@ -1098,6 +1109,19 @@ impl RunnerManager {
             bail!("Invalid repo name: expected non-empty 'owner/repo'");
         }
 
+        if let Some(name) = name {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                bail!("Runner name cannot be empty");
+            }
+            if trimmed.chars().count() > 100 {
+                bail!("Runner name must be at most 100 characters");
+            }
+            if trimmed.chars().any(char::is_control) {
+                bail!("Runner name cannot contain control characters");
+            }
+        }
+
         if matches!(mode, Some(RunnerMode::Container)) {
             match container {
                 None => bail!("Container mode requires a container image configuration"),
@@ -1108,7 +1132,7 @@ impl RunnerManager {
             }
 
             if let Some(name) = name {
-                if !name.chars().all(|character| {
+                if !name.trim().chars().all(|character| {
                     character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
                 }) {
                     bail!(
@@ -1143,15 +1167,12 @@ impl RunnerManager {
 
         let id = uuid::Uuid::new_v4().to_string();
         let name = match name {
-            Some(n) => n,
+            Some(name) => name.trim().to_string(),
             None => {
                 let num = self.next_runner_number(repo).await;
                 format!("{repo}-runner-{num}")
             }
         };
-
-        let work_dir = self.config.runners_dir().join(&id);
-        std::fs::create_dir_all(&work_dir)?;
 
         // Container runners are Linux regardless of host, and need a stable
         // `docker` marker for routing; native runners keep host platform labels.
@@ -1171,6 +1192,9 @@ impl RunnerManager {
             }
             None => platform_defaults,
         };
+
+        let work_dir = self.config.runners_dir().join(&id);
+        std::fs::create_dir_all(&work_dir)?;
 
         let runner = RunnerInfo {
             config: RunnerConfig {
@@ -1844,9 +1868,10 @@ impl RunnerManager {
                 );
             }
             let mut processes = self.processes.write().await;
-            if processes.insert(id.to_string(), handle).is_some() {
+            if processes.contains_key(id) {
                 bail!("Runner '{id}' already has an active process");
             }
+            processes.insert(id.to_string(), handle);
             runner.state = RunnerState::Online;
             runner.pid = pid;
             runner.container_id = container_id;
@@ -1857,7 +1882,13 @@ impl RunnerManager {
             runner.error_message = None;
         }
         self.emit_state_event(id, "online");
-        self.save_to_disk().await?;
+        if let Err(error) = self.save_to_disk().await {
+            tracing::error!(
+                runner = %id,
+                error = %error,
+                "Runner is online, but its state could not be persisted"
+            );
+        }
 
         // 5c. Spawn log reader tasks
         if let Some(stdout) = stdout {
@@ -2968,6 +2999,38 @@ mod tests {
         )
         .unwrap();
         assert!(!persisted[0].was_running);
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_blank_and_control_character_names() {
+        let manager = create_test_manager();
+        assert!(manager
+            .create(
+                "owner/repo",
+                Some("   ".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_err());
+        assert!(manager
+            .create(
+                "owner/repo",
+                Some(
+                    "bad
+name"
+                        .to_string()
+                ),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_err());
+        assert!(manager.list().await.is_empty());
     }
 
     #[tokio::test]
