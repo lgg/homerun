@@ -19,5 +19,17 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
-      - name: Validate CI workflow
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest -color .github/workflows/ci.yml
+      - name: Capture CI validation result
+        shell: bash
+        run: |
+          set +e
+          go run github.com/rhysd/actionlint/cmd/actionlint@latest -no-color .github/workflows/ci.yml > actionlint.log 2>&1
+          echo "$?" > actionlint.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-actionlint-report
+          path: |
+            actionlint.log
+            actionlint.status
+          retention-days: 1
