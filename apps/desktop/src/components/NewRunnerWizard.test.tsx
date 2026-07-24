@@ -232,6 +232,29 @@ describe("NewRunnerWizard", () => {
     expect(screen.getByPlaceholderText("Search repositories...")).toBeInTheDocument();
   });
 
+  it("does not close when the backdrop is clicked", async () => {
+    const { container, props } = await renderWizard();
+    const overlay = container.querySelector(".dialog-overlay");
+    expect(overlay).not.toBeNull();
+
+    fireEvent.click(overlay!);
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("resolves a preselected repository and generates a runner name", async () => {
+    await renderWizard({ preselectedRepo: "org/frontend" });
+
+    const nameInput = await screen.findByLabelText("Name");
+    await waitFor(() => expect((nameInput as HTMLInputElement).value).toMatch(/^frontend-runner-/));
+  });
+
+  it("falls back to repository selection when a preselected repository is stale", async () => {
+    await renderWizard({ preselectedRepo: "org/removed" });
+
+    expect(await screen.findByPlaceholderText("Search repositories...")).toBeInTheDocument();
+    expect(screen.queryByText("Loading repository...")).not.toBeInTheDocument();
+  });
+
   it("Cancel button calls onClose", async () => {
     const { props } = await renderWizard();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

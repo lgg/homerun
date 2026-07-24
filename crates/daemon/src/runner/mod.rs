@@ -20,11 +20,11 @@ use crate::runner::steps::{StepsResponse, WorkerLogWatcher};
 use crate::runner::types::{RunnerConfig, RunnerInfo, RunnerMode};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
-use tokio::sync::{broadcast, watch, Notify, RwLock};
+use tokio::sync::{broadcast, watch, Mutex, Notify, RwLock};
 
 /// A runner's underlying execution unit — a native child process, or a
 /// Docker container. `RunnerManager`'s state machine, log streaming, and
@@ -86,6 +86,17 @@ pub struct RunnerManager {
     recent_logs: Arc<RwLock<HashMap<String, VecDeque<LogEntry>>>>,
     name_counters: Arc<RwLock<HashMap<String, u32>>>,
     auth_token: Arc<RwLock<Option<String>>>,
+    /// User intent, independent from the transient process state. A runner that
+    /// crashes remains desired-running until the user explicitly stops/deletes it.
+    desired_running: Arc<RwLock<HashSet<String>>>,
+    /// Prevent duplicate recovery loops for the same runner.
+    recovering: Arc<Mutex<HashSet<String>>>,
+    /// Runner IDs currently inside the registration/start pipeline. Deletion
+    /// waits for this pipeline to finish before touching the work directory.
+    starting: Arc<RwLock<HashSet<String>>>,
+    /// Serialize persistence writes. Multiple async lifecycle tasks can request
+    /// a save concurrently, and unsynchronized writes can truncate runners.json.
+    persistence_lock: Arc<Mutex<()>>,
     auth_manager: Option<AuthManager>,
     step_watcher: WorkerLogWatcher,
     pub step_log_cache: step_log_cache::StepLogCache,
@@ -166,6 +177,10 @@ impl RunnerManager {
             recent_logs: Arc::new(RwLock::new(HashMap::new())),
             name_counters: Arc::new(RwLock::new(HashMap::new())),
             auth_token: Arc::new(RwLock::new(None)),
+            desired_running: Arc::new(RwLock::new(HashSet::new())),
+            recovering: Arc::new(Mutex::new(HashSet::new())),
+            starting: Arc::new(RwLock::new(HashSet::new())),
+            persistence_lock: Arc::new(Mutex::new(())),
             auth_manager: None,
             step_watcher: WorkerLogWatcher::new(),
             step_log_cache: step_log_cache::StepLogCache::new(),
@@ -471,14 +486,18 @@ impl RunnerManager {
 
     /// Save all runner configs to disk as JSON.
     pub async fn save_to_disk(&self) -> Result<()> {
-        let runners = self.runners.read().await;
-        let persisted: Vec<PersistedRunner> = runners
-            .values()
-            .map(|r| PersistedRunner {
-                config: r.config.clone(),
-                was_running: r.state == RunnerState::Online || r.state == RunnerState::Busy,
-            })
-            .collect();
+        let _persistence_guard = self.persistence_lock.lock().await;
+        let persisted = {
+            let desired_running = self.desired_running.read().await;
+            let runners = self.runners.read().await;
+            runners
+                .values()
+                .map(|runner| PersistedRunner {
+                    config: runner.config.clone(),
+                    was_running: desired_running.contains(&runner.config.id),
+                })
+                .collect::<Vec<_>>()
+        };
         let json = serde_json::to_string_pretty(&persisted)?;
         let path = self.config.runners_json_path();
         if let Some(parent) = path.parent() {
@@ -500,6 +519,7 @@ impl RunnerManager {
         let json = std::fs::read_to_string(&path)?;
         let persisted: Vec<PersistedRunner> = serde_json::from_str(&json)?;
         let mut need_restart = Vec::new();
+        let mut desired_running = HashSet::new();
         let mut runners = self.runners.write().await;
         for entry in persisted {
             let id = entry.config.id.clone();
@@ -524,6 +544,9 @@ impl RunnerManager {
             } else {
                 (RunnerState::Offline, None)
             };
+            if entry.was_running || (is_service && state == RunnerState::Online) {
+                desired_running.insert(id.clone());
+            }
             runners.insert(
                 id,
                 RunnerInfo {
@@ -545,6 +568,7 @@ impl RunnerManager {
             );
         }
         drop(runners);
+        *self.desired_running.write().await = desired_running;
 
         // Load job history from disk
         match history::load_all(&self.config.history_dir()) {
@@ -686,7 +710,7 @@ impl RunnerManager {
             }
 
             // Process exited — transition to Offline and recover unless it was explicitly stopped.
-            let should_restart = {
+            let unexpected = {
                 let mut runners = manager.runners.write().await;
                 if let Some(r) = runners.get_mut(&rid) {
                     let unexpected = r.state == RunnerState::Online || r.state == RunnerState::Busy;
@@ -694,19 +718,25 @@ impl RunnerManager {
                     r.pid = None;
                     r.container_id = None;
                     r.started_at = None;
+                    r.current_job = None;
+                    r.job_context = None;
+                    r.job_started_at = None;
+                    r.error_message = unexpected.then(|| {
+                        "Runner process exited unexpectedly; recovery is scheduled".to_string()
+                    });
                     unexpected
                 } else {
                     false
                 }
             };
             manager.emit_state_event(&rid, "offline");
-            if should_restart {
-                manager.schedule_unexpected_restart(rid.clone());
+            if unexpected && manager.is_desired_running(&rid).await {
+                manager.schedule_recovery(rid.clone());
             } else {
                 let _ = manager.save_to_disk().await;
             }
-            let _ = exit_tx.send(true);
             processes.write().await.remove(&rid);
+            let _ = exit_tx.send(true);
         });
     }
 
@@ -1002,6 +1032,46 @@ impl RunnerManager {
 
     // ── CRUD ───────────────────────────────────────────────────────
 
+    /// Validate fields that do not require mutating manager state. API handlers
+    /// call this before authentication so malformed requests still return 400,
+    /// while valid unauthenticated requests never persist orphaned runners.
+    pub fn validate_create_request(
+        repo_full_name: &str,
+        name: Option<&str>,
+        mode: Option<&RunnerMode>,
+        container: Option<&types::ContainerConfig>,
+    ) -> Result<()> {
+        let Some((owner, repo)) = repo_full_name.split_once('/') else {
+            bail!("Invalid repo name: expected 'owner/repo'");
+        };
+        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+            bail!("Invalid repo name: expected non-empty 'owner/repo'");
+        }
+
+        if matches!(mode, Some(RunnerMode::Container)) {
+            match container {
+                None => bail!("Container mode requires a container image configuration"),
+                Some(config) if config.image.trim().is_empty() => {
+                    bail!("Container mode requires a non-empty container image")
+                }
+                _ => {}
+            }
+
+            if let Some(name) = name {
+                if !name.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+                }) {
+                    bail!(
+                        "Container runner name may only contain letters, digits, '_', '.' or '-' \
+                         (it is used as the Docker container name)"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn create(
         &self,
         repo_full_name: &str,
@@ -1011,24 +1081,15 @@ impl RunnerManager {
         group_id: Option<String>,
         container: Option<types::ContainerConfig>,
     ) -> Result<RunnerInfo> {
-        let parts: Vec<&str> = repo_full_name.split('/').collect();
-        if parts.len() != 2 {
-            bail!("Invalid repo name: expected 'owner/repo'");
-        }
-        let (owner, repo) = (parts[0], parts[1]);
-
-        // Container mode needs a real image to run — reject a missing or empty
-        // config here rather than let the start path fall back to native
-        // execution of a Linux runner binary (or fail opaquely at image pull).
-        if matches!(mode.as_ref(), Some(RunnerMode::Container)) {
-            match container.as_ref() {
-                None => bail!("Container mode requires a container image configuration"),
-                Some(c) if c.image.trim().is_empty() => {
-                    bail!("Container mode requires a non-empty container image")
-                }
-                _ => {}
-            }
-        }
+        Self::validate_create_request(
+            repo_full_name,
+            name.as_deref(),
+            mode.as_ref(),
+            container.as_ref(),
+        )?;
+        let (owner, repo) = repo_full_name
+            .split_once('/')
+            .expect("validated repository name must contain one slash");
 
         let id = uuid::Uuid::new_v4().to_string();
         let name = match name {
@@ -1038,20 +1099,6 @@ impl RunnerManager {
                 format!("{repo}-runner-{num}")
             }
         };
-
-        // A container runner's name becomes the Docker container name
-        // (`homerun-runner-{name}`), which must match Docker's grammar; reject
-        // invalid characters here instead of failing opaquely at container start.
-        if matches!(mode.as_ref(), Some(RunnerMode::Container))
-            && !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-        {
-            bail!(
-                "Container runner name may only contain letters, digits, '_', '.' or '-' \
-                 (it is used as the Docker container name)"
-            );
-        }
 
         // Runner names must be globally unique. GitHub requires unique runner
         // names per repo, and the Docker container name (`homerun-runner-{name}`)
@@ -1236,11 +1283,30 @@ impl RunnerManager {
                 if removed_count >= to_remove {
                     break;
                 }
-                if runner.state == RunnerState::Busy {
+                if matches!(
+                    runner.state,
+                    RunnerState::Busy | RunnerState::Stopping | RunnerState::Deleting
+                ) {
+                    // Keep the existing response field for backwards compatibility;
+                    // it represents runners that cannot be safely removed yet.
                     skipped_busy.push(runner.config.id.clone());
                     continue;
                 }
-                if let Err(e) = self.delete(&runner.config.id).await {
+
+                let token = self.auth_token.read().await.clone();
+                let delete_result = if let Some(token) = token {
+                    self.full_delete(&runner.config.id, &token).await
+                } else if runner.state == RunnerState::Online
+                    || self.has_active_process(&runner.config.id).await
+                {
+                    match self.stop_process(&runner.config.id).await {
+                        Ok(()) => self.delete(&runner.config.id).await,
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    self.delete(&runner.config.id).await
+                };
+                if let Err(e) = delete_result {
                     tracing::error!(
                         "Failed to delete runner {} during scale-down: {e}",
                         runner.config.id
@@ -1370,7 +1436,36 @@ impl RunnerManager {
         })
     }
 
+    pub async fn has_active_process(&self, id: &str) -> bool {
+        self.processes.read().await.contains_key(id)
+    }
+
+    async fn wait_for_start_to_finish(&self, id: &str) -> Result<()> {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                if !self.starting.read().await.contains(id) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("Timed out waiting for runner '{id}' start operation to finish")
+        })?;
+        Ok(())
+    }
+
     pub async fn delete(&self, id: &str) -> Result<()> {
+        // Cancel future recovery first, then wait until any in-flight registration
+        // no longer uses the work directory. If it managed to start a process,
+        // stop that process before removing files.
+        self.set_desired_running(id, false).await?;
+        self.wait_for_start_to_finish(id).await?;
+        if self.has_active_process(id).await {
+            self.stop_process(id).await?;
+        }
+
         let mut runners = self.runners.write().await;
         if let Some(runner) = runners.remove(id) {
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
@@ -1384,7 +1479,13 @@ impl RunnerManager {
     }
 
     pub async fn update(&self, id: &str, req: types::UpdateRunnerRequest) -> Result<RunnerInfo> {
-        let display_name = req.display_name;
+        // Validate every field before mutating anything so a rejected combined
+        // PATCH cannot partially change labels or mode.
+        let display_name = match req.display_name {
+            Some(value) => Some(types::normalize_display_name(value)?),
+            None => None,
+        };
+
         let updated = {
             let mut runners = self.runners.write().await;
             let runner = runners
@@ -1396,13 +1497,13 @@ impl RunnerManager {
             if let Some(mode) = req.mode {
                 runner.config.mode = mode;
             }
+            if let Some(display_name) = display_name {
+                runner.config.display_name = display_name;
+            }
             runner.clone()
         };
 
         self.save_to_disk().await?;
-        if let Some(value) = display_name {
-            return self.update_display_name(id, value).await;
-        }
         Ok(updated)
     }
 
@@ -1454,12 +1555,23 @@ impl RunnerManager {
     /// 7. Store PID, update state to Online
     /// 8. Spawn background monitor task
     pub async fn register_and_start(&self, id: &str, auth_token: &str) -> Result<()> {
-        // 1. Transition Creating -> Registering
-        self.update_state(id, RunnerState::Registering).await?;
-        self.emit_state_event(id, "registering");
+        {
+            let mut starting = self.starting.write().await;
+            if !starting.insert(id.to_string()) {
+                bail!("Runner '{id}' already has a start operation in progress");
+            }
+        }
 
-        // Continue with the common flow
-        self.do_register_and_start(id, auth_token).await
+        let result = async {
+            self.set_desired_running(id, true).await?;
+            // 1. Transition Creating -> Registering
+            self.update_state(id, RunnerState::Registering).await?;
+            self.emit_state_event(id, "registering");
+            self.do_register_and_start(id, auth_token).await
+        }
+        .await;
+        self.starting.write().await.remove(id);
+        result
     }
 
     /// Start a runner that is already in the Registering state.
@@ -1469,8 +1581,21 @@ impl RunnerManager {
         id: &str,
         auth_token: &str,
     ) -> Result<()> {
-        self.emit_state_event(id, "registering");
-        self.do_register_and_start(id, auth_token).await
+        {
+            let mut starting = self.starting.write().await;
+            if !starting.insert(id.to_string()) {
+                bail!("Runner '{id}' already has a start operation in progress");
+            }
+        }
+
+        let result = async {
+            self.set_desired_running(id, true).await?;
+            self.emit_state_event(id, "registering");
+            self.do_register_and_start(id, auth_token).await
+        }
+        .await;
+        self.starting.write().await.remove(id);
+        result
     }
 
     /// Common register-and-start flow (assumes already in Registering state):
@@ -1528,6 +1653,7 @@ impl RunnerManager {
             Err(e) => {
                 if crate::github::is_bad_credentials(&e) {
                     tracing::warn!("GitHub token is invalid (Bad credentials), logging out");
+                    self.set_auth_token(None).await;
                     if let Some(ref auth) = self.auth_manager {
                         let _ = auth.logout().await;
                     }
@@ -1625,6 +1751,10 @@ impl RunnerManager {
                 r.pid = pid;
                 r.container_id = container_id;
                 r.started_at = Some(started_at);
+                r.current_job = None;
+                r.job_context = None;
+                r.job_started_at = None;
+                r.error_message = None;
             }
         }
         self.emit_state_event(id, "online");
@@ -2088,12 +2218,10 @@ impl RunnerManager {
             };
             tracing::info!("Runner {} exited: {}", runner_id, exit_description);
 
-            // Signal that the process has fully exited
-            let _ = exit_tx.send(true);
-
-            // Update state to Offline. Online/Busy means the process died by itself;
-            // Stopping means the user explicitly requested the shutdown.
-            let should_restart = {
+            // Update state before notifying stop callers. This guarantees that a
+            // successful stop wait never returns while the old process is still
+            // represented as running.
+            let unexpected = {
                 let mut runners = manager.runners.write().await;
                 if let Some(r) = runners.get_mut(&runner_id) {
                     let unexpected = r.state == RunnerState::Online || r.state == RunnerState::Busy;
@@ -2102,6 +2230,12 @@ impl RunnerManager {
                         r.pid = None;
                         r.container_id = None;
                         r.started_at = None;
+                        r.current_job = None;
+                        r.job_context = None;
+                        r.job_started_at = None;
+                        r.error_message = unexpected.then(|| {
+                            "Runner process exited unexpectedly; recovery is scheduled".to_string()
+                        });
                     }
                     unexpected
                 } else {
@@ -2110,52 +2244,104 @@ impl RunnerManager {
             };
             manager.processes.write().await.remove(&runner_id);
             manager.emit_state_event(&runner_id, "offline");
-            if should_restart {
-                manager.schedule_unexpected_restart(runner_id.clone());
+
+            let should_recover = unexpected && manager.is_desired_running(&runner_id).await;
+            if should_recover {
+                manager.schedule_recovery(runner_id.clone());
+            } else {
+                let _ = manager.save_to_disk().await;
             }
+            let _ = exit_tx.send(true);
         });
 
         Ok(())
     }
 
-    /// Restart a runner that exited while it was expected to remain online.
-    /// Explicit Stop transitions the runner to `Stopping` first, so it never enters this path.
-    fn schedule_unexpected_restart(&self, runner_id: String) {
+    async fn set_desired_running(&self, runner_id: &str, desired: bool) -> Result<()> {
+        // Never retain desired-running intent for an ID that does not exist.
+        // This also makes a failed start of a deleted/missing runner atomic.
+        if desired && !self.runners.read().await.contains_key(runner_id) {
+            bail!("Runner not found");
+        }
+
+        {
+            let mut desired_running = self.desired_running.write().await;
+            if desired {
+                desired_running.insert(runner_id.to_string());
+            } else {
+                desired_running.remove(runner_id);
+            }
+        }
+        self.save_to_disk().await
+    }
+
+    async fn is_desired_running(&self, runner_id: &str) -> bool {
+        self.desired_running.read().await.contains(runner_id)
+    }
+
+    /// Keep retrying a runner that the user expects to be online. Retries are
+    /// de-duplicated and back off to one attempt per minute. Explicit Stop or
+    /// Delete clears `desired_running`, which cancels the loop.
+    pub fn schedule_recovery(&self, runner_id: String) {
         let manager = self.clone();
         tokio::spawn(async move {
-            const BACKOFF_SECS: [u64; 3] = [2, 5, 15];
+            {
+                let mut recovering = manager.recovering.lock().await;
+                if !recovering.insert(runner_id.clone()) {
+                    return;
+                }
+            }
 
-            for (index, delay_secs) in BACKOFF_SECS.into_iter().enumerate() {
+            const BACKOFF_SECS: [u64; 5] = [2, 5, 15, 30, 60];
+            let mut attempt = 0usize;
+
+            loop {
+                let delay_secs = BACKOFF_SECS[attempt.min(BACKOFF_SECS.len() - 1)];
                 tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
 
+                if !manager.is_desired_running(&runner_id).await {
+                    break;
+                }
+
                 let Some(info) = manager.get(&runner_id).await else {
-                    return;
+                    break;
                 };
-                if info.state != RunnerState::Offline && info.state != RunnerState::Error {
-                    // The user already started/stopped/deleted it, or another recovery succeeded.
-                    return;
+                match info.state {
+                    RunnerState::Offline | RunnerState::Error => {}
+                    RunnerState::Registering => {
+                        // A manual start is in flight. Keep this de-duplicated loop
+                        // alive so it can resume if that attempt fails.
+                        continue;
+                    }
+                    RunnerState::Online | RunnerState::Busy => break,
+                    RunnerState::Stopping => continue,
+                    RunnerState::Creating | RunnerState::Deleting => break,
                 }
 
                 let Some(token) = manager.auth_token.read().await.clone() else {
-                    tracing::error!(runner = %runner_id, "Cannot auto-restart runner: no auth token");
-                    let mut runners = manager.runners.write().await;
-                    if let Some(runner) = runners.get_mut(&runner_id) {
-                        runner.state = RunnerState::Error;
-                        runner.error_message = Some(
-                            "Runner exited unexpectedly and could not restart because authentication is unavailable"
-                                .to_string(),
-                        );
+                    {
+                        let mut runners = manager.runners.write().await;
+                        if let Some(runner) = runners.get_mut(&runner_id) {
+                            let next_delay =
+                                BACKOFF_SECS[(attempt + 1).min(BACKOFF_SECS.len() - 1)];
+                            runner.state = RunnerState::Error;
+                            runner.error_message = Some(format!(
+                                "Runner is waiting for authentication; retrying in {next_delay}s"
+                            ));
+                        }
                     }
                     manager.emit_state_event(&runner_id, "error");
-                    return;
+                    let _ = manager.save_to_disk().await;
+                    attempt += 1;
+                    continue;
                 };
 
                 if let Err(error) = manager
                     .update_state(&runner_id, RunnerState::Registering)
                     .await
                 {
-                    tracing::warn!(runner = %runner_id, error = %error, "Auto-restart state transition failed");
-                    return;
+                    tracing::warn!(runner = %runner_id, error = %error, "Recovery state transition failed");
+                    break;
                 }
                 manager.emit_state_event(&runner_id, "registering");
 
@@ -2166,91 +2352,144 @@ impl RunnerManager {
                     Ok(()) => {
                         tracing::info!(
                             runner = %runner_id,
-                            attempt = index + 1,
+                            attempt = attempt + 1,
                             "Runner recovered after an unexpected exit"
                         );
-                        return;
+                        break;
                     }
                     Err(error) => {
+                        attempt += 1;
+                        let next_delay = BACKOFF_SECS[attempt.min(BACKOFF_SECS.len() - 1)];
                         tracing::error!(
                             runner = %runner_id,
-                            attempt = index + 1,
+                            attempt,
                             error = %error,
-                            "Automatic runner restart failed"
+                            "Automatic runner recovery failed"
                         );
-                        let final_attempt = index + 1 == BACKOFF_SECS.len();
-                        let message = if final_attempt {
-                            format!(
-                                "Runner exited unexpectedly and automatic restart failed after {} attempts: {error:#}",
-                                BACKOFF_SECS.len()
-                            )
-                        } else {
-                            format!("Automatic restart attempt {} failed: {error:#}", index + 1)
-                        };
                         let _ = manager
-                            .update_state_with_error(&runner_id, RunnerState::Error, Some(message))
+                            .update_state_with_error(
+                                &runner_id,
+                                RunnerState::Error,
+                                Some(format!(
+                                    "Automatic recovery attempt {attempt} failed: {error:#}. Retrying in {next_delay}s"
+                                )),
+                            )
                             .await;
                         manager.emit_state_event(&runner_id, "error");
                     }
                 }
             }
+
+            manager.recovering.lock().await.remove(&runner_id);
         });
     }
 
-    /// Stop a running runner process.
-    ///
+    /// Stop a running runner process because the user explicitly requested it.
+    pub async fn stop_process(&self, id: &str) -> Result<()> {
+        self.stop_process_internal(id, true).await
+    }
+
+    /// Stop a process while retaining the user's desired-running intent. This is
+    /// used by restart and daemon shutdown flows so a later launch can restore it.
+    pub async fn stop_process_preserving_intent(&self, id: &str) -> Result<()> {
+        self.stop_process_internal(id, false).await
+    }
+
     /// Signals the monitoring task to kill the child via `Notify`, then waits
     /// for the `watch` channel to confirm the process has fully exited.
     /// No shared lock on `Child` — eliminates the deadlock from issue #31.
-    pub async fn stop_process(&self, id: &str) -> Result<()> {
+    async fn stop_process_internal(&self, id: &str, clear_desired: bool) -> Result<()> {
+        if clear_desired {
+            // Clear user intent before signalling the process, so an exit observed
+            // by the monitor cannot race into automatic recovery.
+            self.set_desired_running(id, false).await?;
+        }
+
         // Transition to Stopping
         self.update_state(id, RunnerState::Stopping).await?;
         self.emit_state_event(id, "stopping");
 
-        // Get the process handle
         let handle = self.processes.read().await.get(id).cloned();
-
         if let Some(handle) = handle {
-            // Signal the monitoring task to kill the child
             handle.kill_signal.notify_one();
 
-            // Wait for the process to fully exit (with timeout)
             let mut exited = handle.exited;
-            let timeout =
-                tokio::time::timeout(std::time::Duration::from_secs(15), exited.wait_for(|&v| v))
-                    .await;
-
-            if timeout.is_err() {
-                tracing::warn!("Timed out waiting for runner {} to exit", id);
-            }
-        }
-
-        // Ensure state is Offline (monitor task may have already done this,
-        // but handle the case where there was no process handle)
-        {
-            let mut runners = self.runners.write().await;
-            if let Some(r) = runners.get_mut(id) {
-                if r.state == RunnerState::Stopping {
-                    r.state = RunnerState::Offline;
-                    r.pid = None;
-                    r.started_at = None;
+            match tokio::time::timeout(std::time::Duration::from_secs(15), exited.wait_for(|&v| v))
+                .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => bail!("Failed while waiting for runner '{id}' to exit: {error}"),
+                Err(_) => {
+                    // Never claim Offline while the old process may still own the
+                    // GitHub runner session; doing so permits a duplicate start.
+                    bail!(
+                        "Timed out waiting for runner '{id}' to exit; it remains in Stopping state"
+                    )
                 }
             }
+
+            // The monitor normally applies this transition before sending the
+            // watch notification. Keep a defensive fallback for reconstructed or
+            // test handles that only signal process exit.
+            let mut runners = self.runners.write().await;
+            if let Some(runner) = runners.get_mut(id) {
+                if runner.state == RunnerState::Stopping {
+                    runner.state = RunnerState::Offline;
+                    runner.pid = None;
+                    runner.container_id = None;
+                    runner.started_at = None;
+                    runner.current_job = None;
+                    runner.job_context = None;
+                    runner.job_started_at = None;
+                    runner.error_message = None;
+                }
+            }
+            drop(runners);
+            self.emit_state_event(id, "offline");
+            self.save_to_disk().await?;
+        } else {
+            // No tracked process exists. Complete the state transition locally.
+            let mut runners = self.runners.write().await;
+            if let Some(runner) = runners.get_mut(id) {
+                runner.state = RunnerState::Offline;
+                runner.pid = None;
+                runner.container_id = None;
+                runner.started_at = None;
+                runner.current_job = None;
+                runner.job_context = None;
+                runner.job_started_at = None;
+                runner.error_message = None;
+            }
+            drop(runners);
+            self.emit_state_event(id, "offline");
+            self.save_to_disk().await?;
         }
-        self.emit_state_event(id, "offline");
+
         Ok(())
     }
 
     /// Full delete flow: stop process, deregister from GitHub, remove work dir.
     pub async fn full_delete(&self, id: &str, auth_token: &str) -> Result<()> {
+        self.get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+
+        // Cancel recovery and serialize against an in-flight registration. The
+        // registration may finish while deletion is waiting; refresh state and
+        // stop any process it created before deregistration/removal.
+        self.set_desired_running(id, false).await?;
+        self.wait_for_start_to_finish(id).await?;
         let runner = self
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-
-        // Stop if running
-        if runner.state == RunnerState::Online || runner.state == RunnerState::Busy {
-            let _ = self.stop_process(id).await;
+        if runner.state == RunnerState::Online
+            || runner.state == RunnerState::Busy
+            || self.has_active_process(id).await
+        {
+            self.stop_process(id)
+                .await
+                .context("Failed to stop runner before deletion")?;
         }
 
         // Try to transition to Deleting
@@ -2529,6 +2768,68 @@ mod tests {
         manager.delete(&id).await.unwrap();
         let runners = manager.list().await;
         assert_eq!(runners.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_validates_display_name_before_mutating_other_fields() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let original_labels = runner.config.labels.clone();
+
+        let result = manager
+            .update(
+                &runner.config.id,
+                types::UpdateRunnerRequest {
+                    labels: Some(vec!["changed".to_string()]),
+                    mode: Some(RunnerMode::Service),
+                    display_name: Some(Some("bad\nname".to_string())),
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        let unchanged = manager.get(&runner.config.id).await.unwrap();
+        assert_eq!(unchanged.config.labels, original_labels);
+        assert_eq!(unchanged.config.mode, RunnerMode::App);
+        assert_eq!(unchanged.config.display_name, None);
+    }
+
+    #[tokio::test]
+    async fn test_desired_running_is_persisted_independently_from_error_state() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+
+        manager.set_desired_running(&id, true).await.unwrap();
+        manager
+            .update_state(&id, RunnerState::Registering)
+            .await
+            .unwrap();
+        manager
+            .update_state_with_error(&id, RunnerState::Error, Some("transient".to_string()))
+            .await
+            .unwrap();
+        manager.save_to_disk().await.unwrap();
+
+        let persisted: Vec<PersistedRunner> = serde_json::from_str(
+            &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert!(persisted[0].was_running);
+
+        manager.set_desired_running(&id, false).await.unwrap();
+        let persisted: Vec<PersistedRunner> = serde_json::from_str(
+            &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+        )
+        .unwrap();
+        assert!(!persisted[0].was_running);
     }
 
     #[tokio::test]
@@ -3947,6 +4248,7 @@ mod tests {
             .write()
             .await
             .insert(runner_id.to_string(), handle);
+        manager.set_desired_running(runner_id, true).await.unwrap();
 
         // Spawn a task that simulates the monitoring task:
         // waits for kill signal, then marks exited
@@ -3965,6 +4267,43 @@ mod tests {
         let runner = manager.get(runner_id).await.unwrap();
         assert_eq!(runner.state, RunnerState::Offline);
         assert_eq!(runner.pid, None);
+        assert!(!manager.is_desired_running(runner_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_stop_process_preserving_intent_keeps_restore_state() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+        manager
+            .update_state(&id, RunnerState::Registering)
+            .await
+            .unwrap();
+        manager
+            .update_state(&id, RunnerState::Online)
+            .await
+            .unwrap();
+        manager.set_desired_running(&id, true).await.unwrap();
+
+        manager.stop_process_preserving_intent(&id).await.unwrap();
+
+        assert_eq!(manager.get(&id).await.unwrap().state, RunnerState::Offline);
+        assert!(manager.is_desired_running(&id).await);
+        let persisted: Vec<PersistedRunner> = serde_json::from_str(
+            &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+        )
+        .unwrap();
+        assert!(persisted[0].was_running);
+    }
+
+    #[test]
+    fn test_validate_create_request_rejects_empty_repository_parts() {
+        for invalid in ["repo", "/repo", "owner/", "owner/repo/extra"] {
+            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());
+        }
     }
 
     #[tokio::test]

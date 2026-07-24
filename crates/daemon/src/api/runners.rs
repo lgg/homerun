@@ -17,6 +17,23 @@ pub async fn create_runner(
     State(state): State<AppState>,
     Json(req): Json<CreateRunnerRequest>,
 ) -> Result<(StatusCode, Json<RunnerInfo>), (StatusCode, String)> {
+    crate::runner::RunnerManager::validate_create_request(
+        &req.repo_full_name,
+        req.name.as_deref(),
+        req.mode.as_ref(),
+        req.container.as_ref(),
+    )
+    .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+
+    // Authenticate before persisting a Creating runner. Otherwise a 401 leaves
+    // an orphaned local runner that never had a chance to start.
+    let token = state.auth.token().await.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            "No auth token available. Please authenticate first.".to_string(),
+        )
+    })?;
+
     let runner = state
         .runner_manager
         .create(
@@ -30,14 +47,7 @@ pub async fn create_runner(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Spawn background task to register and start the runner
-    let token = state.auth.token().await.ok_or_else(|| {
-        (
-            StatusCode::UNAUTHORIZED,
-            "No auth token available. Please authenticate first.".to_string(),
-        )
-    })?;
-
+    // Spawn background task to register and start the runner.
     let manager = state.runner_manager.clone();
     let runner_id = runner.config.id.clone();
     tokio::spawn(async move {
@@ -50,6 +60,7 @@ pub async fn create_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
+            manager.schedule_recovery(runner_id);
         }
     });
 
@@ -83,35 +94,25 @@ pub async fn update_runner(
     Path(id): Path<String>,
     Json(req): Json<UpdateRunnerRequest>,
 ) -> Result<Json<RunnerInfo>, (StatusCode, String)> {
-    let display_name = req.display_name.clone();
-    let mut updated = state
-        .runner_manager
-        .update(&id, req)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-
-    if let Some(value) = display_name {
-        updated = state
-            .runner_manager
-            .update_display_name(&id, value)
-            .await
-            .map_err(|e| {
-                let message = e.to_string();
-                let status = if message == "Runner not found" {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
-                (status, message)
-            })?;
+    if state.runner_manager.get(&id).await.is_none() {
+        return Err((StatusCode::NOT_FOUND, format!("Runner '{id}' not found")));
     }
 
-    // Persist every PATCH operation. This also fixes labels/mode updates being lost on restart.
-    state
-        .runner_manager
-        .save_to_disk()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Validate before the manager mutates labels/mode, so an invalid alias makes
+    // the entire PATCH fail without partial changes.
+    if let Some(value) = req.display_name.clone() {
+        crate::runner::types::normalize_display_name(value)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    }
+
+    let updated = state.runner_manager.update(&id, req).await.map_err(|e| {
+        let message = e.to_string();
+        if message == "Runner not found" {
+            (StatusCode::NOT_FOUND, message)
+        } else {
+            (StatusCode::INTERNAL_SERVER_ERROR, message)
+        }
+    })?;
 
     Ok(Json(updated))
 }
@@ -120,7 +121,7 @@ pub async fn delete_runner(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let runner = state
+    state
         .runner_manager
         .get(&id)
         .await
@@ -128,30 +129,22 @@ pub async fn delete_runner(
 
     let token = state.auth.token().await;
     if let Some(token) = token {
-        // Full delete with deregistration
-        if runner.state == crate::runner::state::RunnerState::Online
-            || runner.state == crate::runner::state::RunnerState::Busy
-            || runner.state == crate::runner::state::RunnerState::Offline
-        {
-            state
-                .runner_manager
-                .full_delete(&id, &token)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to delete runner: {e}"),
-                    )
-                })?;
-        } else {
-            state
-                .runner_manager
-                .delete(&id)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        }
+        // Always use the serialized full-delete flow while authenticated. It
+        // waits for an in-flight registration, stops any process it produced,
+        // and deregisters the resulting GitHub runner before removing files.
+        state
+            .runner_manager
+            .full_delete(&id, &token)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to delete runner: {e}"),
+                )
+            })?;
     } else {
-        // No auth token, just remove locally
+        // No auth token: the manager still serializes against registration and
+        // stops any local process before removing its data.
         state
             .runner_manager
             .delete(&id)
@@ -177,6 +170,13 @@ pub async fn start_runner(
         return Err((
             StatusCode::CONFLICT,
             format!("Runner is in {:?} state, cannot start", runner.state),
+        ));
+    }
+    if state.runner_manager.has_active_process(&id).await {
+        return Err((
+            StatusCode::CONFLICT,
+            "Runner still has an active process and must be stopped before starting again"
+                .to_string(),
         ));
     }
 
@@ -210,6 +210,7 @@ pub async fn start_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
+            manager.schedule_recovery(runner_id);
         }
     });
 
@@ -228,6 +229,7 @@ pub async fn stop_runner(
 
     if runner.state != crate::runner::state::RunnerState::Online
         && runner.state != crate::runner::state::RunnerState::Busy
+        && !state.runner_manager.has_active_process(&id).await
     {
         return Err((
             StatusCode::CONFLICT,
@@ -255,25 +257,34 @@ pub async fn restart_runner(
         .await
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Runner '{id}' not found")))?;
 
-    // Stop if running
-    if runner.state == crate::runner::state::RunnerState::Online
-        || runner.state == crate::runner::state::RunnerState::Busy
-    {
-        state.runner_manager.stop_process(&id).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to stop runner: {e}"),
-            )
-        })?;
-    }
-
-    // Now start — stop_process already waited for process to fully exit
+    // Authenticate before stopping. A failed restart must not take a healthy
+    // runner offline merely because credentials are unavailable.
     let token = state.auth.token().await.ok_or_else(|| {
         (
             StatusCode::UNAUTHORIZED,
             "No auth token available. Please authenticate first.".to_string(),
         )
     })?;
+
+    // Stop if running, but retain desired-running intent throughout restart.
+    if runner.state == crate::runner::state::RunnerState::Online
+        || runner.state == crate::runner::state::RunnerState::Busy
+        || state.runner_manager.has_active_process(&id).await
+    {
+        if let Err(error) = state
+            .runner_manager
+            .stop_process_preserving_intent(&id)
+            .await
+        {
+            state.runner_manager.schedule_recovery(id.clone());
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to stop runner for restart: {error}"),
+            ));
+        }
+    }
+
+    // Now start — the old process is fully stopped.
 
     let manager = state.runner_manager.clone();
     let runner_id = id.clone();
@@ -283,6 +294,7 @@ pub async fn restart_runner(
             .await
         {
             tracing::error!("Failed to transition runner {}: {}", runner_id, e);
+            manager.schedule_recovery(runner_id);
             return;
         }
         if let Err(e) = manager
@@ -297,6 +309,7 @@ pub async fn restart_runner(
                     Some(format!("{e:#}")),
                 )
                 .await;
+            manager.schedule_recovery(runner_id);
         }
     });
 
@@ -464,6 +477,99 @@ mod tests {
         let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let labels = updated["config"]["labels"].as_array().unwrap();
         assert!(labels.iter().any(|l| l.as_str() == Some("custom-label")));
+    }
+
+    #[tokio::test]
+    async fn test_update_runner_rejects_invalid_display_name_without_partial_changes() {
+        let state = AppState::new_test();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+        let original_labels = runner.config.labels.clone();
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/runners/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"labels":["changed"],"mode":"service","display_name":"bad\nname"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let unchanged = state.runner_manager.get(&id).await.unwrap();
+        assert_eq!(unchanged.config.labels, original_labels);
+        assert_eq!(unchanged.config.mode, crate::runner::types::RunnerMode::App);
+        assert_eq!(unchanged.config.display_name, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_runner_trims_and_clears_display_name() {
+        let state = AppState::new_test();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id.clone();
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/runners/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"display_name":"  Office runner  "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            state
+                .runner_manager
+                .get(&id)
+                .await
+                .unwrap()
+                .config
+                .display_name
+                .as_deref(),
+            Some("Office runner")
+        );
+
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/runners/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"display_name":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            state
+                .runner_manager
+                .get(&id)
+                .await
+                .unwrap()
+                .config
+                .display_name,
+            None
+        );
     }
 
     #[tokio::test]

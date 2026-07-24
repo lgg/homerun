@@ -52,18 +52,29 @@ export function NewRunnerWizard({
     return null; // will be resolved once repos load if preselectedRepo is set
   });
   const [resolvedPreselect, setResolvedPreselect] = useState(false);
-
-  // Resolve preselected repo once repos load
-  useMemo(() => {
-    if (preselectedRepo && !resolvedPreselect && repos.length > 0) {
-      const found = repos.find((r) => r.full_name === preselectedRepo) ?? null;
-      setSelectedRepo(found);
-      setResolvedPreselect(true);
-    }
-  }, [preselectedRepo, repos, resolvedPreselect]);
-
   const [name, setName] = useState("");
   const [labelsInput, setLabelsInput] = useState(DEFAULT_LABELS.join(", "));
+
+  // Resolve a repository passed from the repositories page after loading completes.
+  // This must be an effect (not useMemo): setting state while rendering can cause
+  // re-entrant renders and an intermittently disappearing wizard.
+  useEffect(() => {
+    if (!preselectedRepo || resolvedPreselect || reposLoading) return;
+
+    const found = repos.find((r) => r.full_name === preselectedRepo) ?? null;
+    setSelectedRepo(found);
+    setResolvedPreselect(true);
+
+    if (found) {
+      setName(generateName(found.name));
+      setStep(1);
+    } else {
+      // A stale/deleted repository must not leave the wizard stuck on an
+      // unresolvable "Loading repository..." screen.
+      setStep(0);
+    }
+  }, [preselectedRepo, repos, reposLoading, resolvedPreselect]);
+
   const [mode, setMode] = useState<RunnerModeChoice>("app");
   const [containerImage, setContainerImage] = useState(DEFAULT_CONTAINER_IMAGE);
   const [preset, setPreset] = useState<ContainerPreset>("base");

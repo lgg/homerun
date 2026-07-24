@@ -40,8 +40,8 @@ pub async fn shutdown_daemon(
                 let manager = state.runner_manager.clone();
                 let id = runner.config.id.clone();
                 stop_futures.push(async move {
-                    if let Err(e) = manager.stop_process(&id).await {
-                        tracing::warn!("Failed to stop runner {}: {}", id, e);
+                    if let Err(e) = manager.stop_process_preserving_intent(&id).await {
+                        tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
                     }
                 });
             }
