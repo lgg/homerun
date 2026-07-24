@@ -41,7 +41,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 --decode .github/maintenance/deep-audit-source.patch.gz.b64 \
+          cat .github/maintenance/deep-audit-patch/part-* \
+            | base64 --decode \
             | gzip --decompress > /tmp/deep-audit-source.patch
           test -s /tmp/deep-audit-source.patch
           head -n 5 /tmp/deep-audit-source.patch
