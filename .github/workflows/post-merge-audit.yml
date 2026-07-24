@@ -65,7 +65,19 @@ jobs:
         run: npm run build
 
       - name: Rust workspace tests
-        run: cargo test --workspace --all-targets
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-targets 2>&1 | tee /tmp/post-merge-cargo-test.log
+
+      - name: Upload Rust test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-cargo-test-diagnostic
+          path: /tmp/post-merge-cargo-test.log
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Rust clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
