@@ -1,0 +1,12 @@
+diff --git a/crates/daemon/src/runner/mod.rs b/crates/daemon/src/runner/mod.rs
+--- a/crates/daemon/src/runner/mod.rs
++++ b/crates/daemon/src/runner/mod.rs
+@@ -2369,7 +2369,7 @@ impl RunnerManager {
+                 Err(_) => {
+                     bail!("Timed out waiting for runner {id} to exit; refusing to start a duplicate process");
+                 }
+-            }
++            };
+         }
+ 
+         // Handle the case where no process handle existed. Normally the monitor
