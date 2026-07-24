@@ -52,6 +52,9 @@ jobs:
           if ! grep -q "Recovering runner state from interrupted Windows swap" crates/daemon/src/runner/mod.rs; then
             python .github/maintenance/post-merge-audit-hardening.py
           fi
+          if ! grep -q "test_update_native_mode_while_stopped" crates/daemon/src/runner/mod.rs; then
+            python .github/maintenance/post-merge-audit-final.py
+          fi
 
       - name: Format source
         shell: bash
@@ -159,6 +162,9 @@ jobs:
           fi
           if ! grep -q "Recovering runner state from interrupted Windows swap" crates/daemon/src/runner/mod.rs; then
             python .github/maintenance/post-merge-audit-hardening.py
+          fi
+          if ! grep -q "test_update_native_mode_while_stopped" crates/daemon/src/runner/mod.rs; then
+            python .github/maintenance/post-merge-audit-final.py
           fi
 
       - name: Install frontend dependencies
