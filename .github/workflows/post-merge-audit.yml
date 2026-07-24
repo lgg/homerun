@@ -46,6 +46,9 @@ jobs:
           else
             python .github/maintenance/post-merge-audit.py
           fi
+          if grep -q "test_update_runner_mode" crates/daemon/src/api/runners.rs; then
+            python .github/maintenance/post-merge-audit-test-fixes.py
+          fi
 
       - name: Format source
         shell: bash
@@ -147,6 +150,9 @@ jobs:
         run: |
           if ! grep -q "async fn begin_stop" crates/daemon/src/runner/mod.rs; then
             python .github/maintenance/post-merge-audit.py
+          fi
+          if grep -q "test_update_runner_mode" crates/daemon/src/api/runners.rs; then
+            python .github/maintenance/post-merge-audit-test-fixes.py
           fi
 
       - name: Install frontend dependencies
