@@ -109,8 +109,14 @@ pub async fn update_runner(
         let message = e.to_string();
         if message == "Runner not found" {
             (StatusCode::NOT_FOUND, message)
-        } else {
+        } else if message.contains("cannot be changed")
+            || message.contains("only be changed while the runner is stopped")
+        {
+            (StatusCode::CONFLICT, message)
+        } else if message.contains("persisting runner update") {
             (StatusCode::INTERNAL_SERVER_ERROR, message)
+        } else {
+            (StatusCode::BAD_REQUEST, message)
         }
     })?;
 
@@ -257,6 +263,29 @@ pub async fn restart_runner(
         .await
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Runner '{id}' not found")))?;
 
+    if !matches!(
+        runner.state,
+        crate::runner::state::RunnerState::Online
+            | crate::runner::state::RunnerState::Busy
+            | crate::runner::state::RunnerState::Offline
+            | crate::runner::state::RunnerState::Error
+    ) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("Runner is in {:?} state, cannot restart", runner.state),
+        ));
+    }
+    if matches!(
+        runner.state,
+        crate::runner::state::RunnerState::Offline | crate::runner::state::RunnerState::Error
+    ) && state.runner_manager.has_active_process(&id).await
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "Runner still has an active process and must be stopped before restarting".to_string(),
+        ));
+    }
+
     // Authenticate before stopping. A failed restart must not take a healthy
     // runner offline merely because credentials are unavailable.
     let token = state.auth.token().await.ok_or_else(|| {
@@ -322,6 +351,28 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_restart_rejects_transitional_state_before_authentication() {
+        let state = AppState::new_test();
+        let runner = state
+            .runner_manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let app = create_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runners/{}/restart", runner.config.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
 
     #[tokio::test]
     async fn test_create_and_list_runners() {
@@ -784,7 +835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_runner_mode() {
+    async fn test_update_runner_rejects_mode_change() {
         let state = AppState::new_test_authenticated();
         let id = create_runner_and_get_id(&state).await;
 
@@ -800,13 +851,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let updated: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(updated["config"]["mode"], "service");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

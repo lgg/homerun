@@ -248,6 +248,20 @@ describe("NewRunnerWizard", () => {
     await waitFor(() => expect((nameInput as HTMLInputElement).value).toMatch(/^frontend-runner-/));
   });
 
+  it("resolves a changed preselected repository while remaining mounted", async () => {
+    const { rerender, props } = await renderWizard({ preselectedRepo: "org/frontend" });
+    const firstName = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await waitFor(() => expect(firstName.value).toMatch(/^frontend-runner-/));
+
+    rerender(
+      <AuthProvider>
+        <NewRunnerWizard {...props} preselectedRepo="org/backend" />
+      </AuthProvider>,
+    );
+    const changedName = (await screen.findByLabelText("Name")) as HTMLInputElement;
+    await waitFor(() => expect(changedName.value).toMatch(/^backend-runner-/));
+  });
+
   it("falls back to repository selection when a preselected repository is stale", async () => {
     await renderWizard({ preselectedRepo: "org/removed" });
 
