@@ -55,6 +55,8 @@ jobs:
           git apply /tmp/deep-audit-source.patch
           git apply --check .github/maintenance/deep-audit-incremental.patch
           git apply .github/maintenance/deep-audit-incremental.patch
+          git apply --check .github/maintenance/deep-audit-test-import.patch
+          git apply .github/maintenance/deep-audit-test-import.patch
 
       - name: Format and inspect source diff
         shell: bash
