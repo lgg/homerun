@@ -1205,6 +1205,10 @@ impl RunnerManager {
         .await
     }
 
+    // This private adapter mirrors the public creation inputs and adds one
+    // atomic persistence flag. Keeping the arguments explicit avoids a second,
+    // duplicative request type solely for internal transaction handling.
+    #[allow(clippy::too_many_arguments)]
     async fn create_with_intent(
         &self,
         repo_full_name: &str,
