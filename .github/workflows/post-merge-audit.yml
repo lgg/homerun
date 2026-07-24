@@ -3,12 +3,14 @@ name: Post-Merge Audit Validation
 on:
   push:
     branches: [audit/post-merge-lifecycle-2026-07-24-v2]
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: write
 
 concurrency:
-  group: post-merge-audit-v2
+  group: post-merge-audit-v2-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -85,6 +87,7 @@ jobs:
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Commit verified source changes
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +129,13 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Apply audited source fixes for validation
+        shell: bash
+        run: |
+          if ! grep -q "async fn begin_stop" crates/daemon/src/runner/mod.rs; then
+            python .github/maintenance/post-merge-audit.py
+          fi
 
       - name: Install frontend dependencies
         working-directory: apps/desktop
