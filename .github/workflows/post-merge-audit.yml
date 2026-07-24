@@ -55,6 +55,9 @@ jobs:
           if ! grep -q "test_update_native_mode_while_stopped" crates/daemon/src/runner/mod.rs; then
             python .github/maintenance/post-merge-audit-final.py
           fi
+          if ! grep -q "persisting runner deletion" crates/daemon/src/runner/mod.rs; then
+            python .github/maintenance/post-merge-audit-final-hardening.py
+          fi
 
       - name: Format source
         shell: bash
@@ -165,6 +168,9 @@ jobs:
           fi
           if ! grep -q "test_update_native_mode_while_stopped" crates/daemon/src/runner/mod.rs; then
             python .github/maintenance/post-merge-audit-final.py
+          fi
+          if ! grep -q "persisting runner deletion" crates/daemon/src/runner/mod.rs; then
+            python .github/maintenance/post-merge-audit-final-hardening.py
           fi
 
       - name: Install frontend dependencies
