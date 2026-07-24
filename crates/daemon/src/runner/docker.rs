@@ -480,13 +480,11 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// `deregister` is documented as best-effort: it must never fail the
-    /// caller even when Docker is unreachable — it should log a warning
-    /// and return `Ok(())` so a broken GitHub-side deregistration never
-    /// blocks deleting a runner locally.
+    /// `deregister` must surface Docker failures so callers retain the local
+    /// runner and can retry instead of silently leaving a stale GitHub runner.
     #[cfg(unix)]
     #[tokio::test]
-    async fn test_deregister_is_best_effort_without_daemon() {
+    async fn test_deregister_fails_without_daemon() {
         let docker = broken_docker_client();
         let dir = tempfile::tempdir().unwrap();
         let result = deregister(
@@ -496,6 +494,6 @@ mod tests {
             "fake-token",
         )
         .await;
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 }
