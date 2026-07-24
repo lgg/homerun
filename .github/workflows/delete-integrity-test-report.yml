@@ -1,4 +1,4 @@
-name: Delete Integrity Test Report
+name: Delete Integrity Tauri Report
 
 on:
   pull_request:
@@ -11,25 +11,29 @@ permissions:
 jobs:
   capture:
     if: github.event.pull_request.number == 12
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
           ref: audit/delete-integrity-and-start-admission-2026-07-24
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - uses: dtolnay/rust-toolchain@stable
-      - name: Capture workspace test result
+      - name: Capture Linux Tauri result
         shell: bash
         run: |
           set +e
-          cargo test --workspace --all-targets > workspace-test.log 2>&1
-          echo "$?" > workspace-test.status
+          cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets > tauri-check.log 2>&1
+          echo "$?" > tauri-check.status
           exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: delete-integrity-workspace-test
+          name: delete-integrity-tauri-check
           path: |
-            workspace-test.log
-            workspace-test.status
+            tauri-check.log
+            tauri-check.status
           retention-days: 1
 
   report:
@@ -38,15 +42,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: delete-integrity-workspace-test
+          name: delete-integrity-tauri-check
       - name: Print focused failure
         shell: bash
         run: |
-          status=$(cat workspace-test.status)
+          status=$(cat tauri-check.status)
           if [[ "$status" != "0" ]]; then
-            grep -nE 'FAILED|failures:|panicked at|error\[|error: test failed|thread .* panicked' workspace-test.log || true
-            tail -n 180 workspace-test.log
+            grep -nE 'error\[|error:|failed to|could not compile' tauri-check.log || true
+            tail -n 200 tauri-check.log
           else
-            echo "Workspace tests passed"
+            echo "Linux Tauri check passed"
           fi
           exit "$status"
