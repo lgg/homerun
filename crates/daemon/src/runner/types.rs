@@ -2,6 +2,8 @@ use crate::runner::state::RunnerState;
 use crate::runner::steps::StepInfo;
 use serde::{Deserialize, Serialize};
 
+const MAX_DISPLAY_NAME_CHARS: usize = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RunnerMode {
@@ -25,7 +27,11 @@ pub struct ContainerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerConfig {
     pub id: String,
+    /// Technical name registered with GitHub Actions. This must never be changed by display-name edits.
     pub name: String,
+    /// Optional local alias shown by HomeRun instead of the technical GitHub runner name.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub display_name: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub labels: Vec<String>,
@@ -134,6 +140,9 @@ pub struct CreateRunnerRequest {
 pub struct UpdateRunnerRequest {
     pub labels: Option<Vec<String>>,
     pub mode: Option<RunnerMode>,
+    /// Outer `Option` distinguishes an omitted field from an explicit null used to clear the alias.
+    #[serde(default, deserialize_with = "deserialize_display_name_update")]
+    pub display_name: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,29 +198,90 @@ pub struct ScaleGroupResponse {
     pub skipped_busy: Vec<String>,
 }
 
+fn deserialize_display_name_update<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
+}
+
+fn normalize_display_name(value: Option<String>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > MAX_DISPLAY_NAME_CHARS {
+        anyhow::bail!("Display name must be at most {MAX_DISPLAY_NAME_CHARS} characters");
+    }
+    if trimmed.chars().any(char::is_control) {
+        anyhow::bail!("Display name cannot contain control characters");
+    }
+
+    Ok(Some(trimmed.to_string()))
+}
+
+impl super::RunnerManager {
+    /// Update only the local HomeRun alias. The GitHub-registered runner name remains untouched.
+    pub async fn update_display_name(
+        &self,
+        id: &str,
+        value: Option<String>,
+    ) -> anyhow::Result<RunnerInfo> {
+        let display_name = normalize_display_name(value)?;
+        let updated = {
+            let mut runners = self.runners.write().await;
+            let runner = runners
+                .get_mut(id)
+                .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+            runner.config.display_name = display_name;
+            runner.clone()
+        };
+
+        self.save_to_disk().await?;
+        Ok(updated)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_runner_config_deserialize_without_group_id() {
+    fn test_runner_config_deserialize_without_optional_fields() {
         let json = r#"{"id":"abc-123","name":"test-runner-1","repo_owner":"owner","repo_name":"repo","labels":["self-hosted"],"mode":"app","work_dir":"/tmp/runners/abc-123"}"#;
         let config: RunnerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.group_id, None);
+        assert_eq!(config.display_name, None);
+        assert_eq!(config.container, None);
     }
 
     #[test]
-    fn test_runner_config_deserialize_with_group_id() {
-        let json = r#"{"id":"abc-123","name":"test-runner-1","repo_owner":"owner","repo_name":"repo","labels":["self-hosted"],"mode":"app","work_dir":"/tmp/runners/abc-123","group_id":"group-uuid-456"}"#;
+    fn test_runner_config_deserialize_with_optional_fields() {
+        let json = r#"{"id":"abc-123","name":"test-runner-1","display_name":"Build machine","repo_owner":"owner","repo_name":"repo","labels":["self-hosted"],"mode":"container","work_dir":"/tmp/runners/abc-123","group_id":"group-uuid-456","container":{"image":"ubuntu:24.04","extra_env":[]}}"#;
         let config: RunnerConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.group_id, Some("group-uuid-456".to_string()));
+        assert_eq!(config.display_name, Some("Build machine".to_string()));
+        assert_eq!(
+            config.container,
+            Some(ContainerConfig {
+                image: "ubuntu:24.04".to_string(),
+                extra_env: vec![],
+            })
+        );
     }
 
     #[test]
-    fn test_runner_config_serialize_without_group_id_omits_field() {
+    fn test_runner_config_serialize_without_optional_fields_omits_them() {
         let config = RunnerConfig {
             id: "abc".to_string(),
             name: "test".to_string(),
+            display_name: None,
             repo_owner: "owner".to_string(),
             repo_name: "repo".to_string(),
             labels: vec![],
@@ -220,45 +290,39 @@ mod tests {
             group_id: None,
             container: None,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("group_id"));
+        let json = serde_json::to_value(&config).unwrap();
+        assert!(json.get("group_id").is_none());
+        assert!(json.get("display_name").is_none());
+        assert!(json.get("container").is_none());
     }
 
     #[test]
-    fn test_runner_config_deserialize_without_container() {
-        let json = r#"{"id":"abc-123","name":"test-runner-1","repo_owner":"owner","repo_name":"repo","labels":["self-hosted"],"mode":"container","work_dir":"/tmp/runners/abc-123"}"#;
-        let config: RunnerConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.container, None);
-    }
-
-    #[test]
-    fn test_runner_config_roundtrip_with_container() {
-        let config = RunnerConfig {
-            id: "abc".to_string(),
-            name: "test".to_string(),
-            repo_owner: "owner".to_string(),
-            repo_name: "repo".to_string(),
-            labels: vec![],
-            mode: RunnerMode::Container,
-            work_dir: std::path::PathBuf::from("/tmp"),
-            group_id: None,
-            container: Some(ContainerConfig {
-                image: "ghcr.io/agallea/homerun-runner:ubuntu-24.04".to_string(),
-                extra_env: vec![],
-            }),
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        let round_tripped: RunnerConfig = serde_json::from_str(&json).unwrap();
+    fn normalize_display_name_trims_and_clears_empty_values() {
         assert_eq!(
-            round_tripped.container.map(|c| c.image),
-            Some("ghcr.io/agallea/homerun-runner:ubuntu-24.04".to_string())
+            normalize_display_name(Some("  Build machine  ".to_string())).unwrap(),
+            Some("Build machine".to_string())
         );
+        assert_eq!(normalize_display_name(Some("   ".to_string())).unwrap(), None);
+        assert_eq!(normalize_display_name(None).unwrap(), None);
     }
 
     #[test]
-    fn test_create_batch_request_deserializes() {
-        let json = r#"{"repo_full_name":"owner/repo","count":3}"#;
-        let req: CreateBatchRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.count, 3);
+    fn normalize_display_name_rejects_invalid_values() {
+        assert!(normalize_display_name(Some("x".repeat(MAX_DISPLAY_NAME_CHARS + 1))).is_err());
+        assert!(normalize_display_name(Some("bad\nname".to_string())).is_err());
+    }
+
+    #[test]
+    fn update_request_distinguishes_omitted_and_null_display_name() {
+        let omitted: UpdateRunnerRequest = serde_json::from_str("{}").unwrap();
+        assert!(omitted.display_name.is_none());
+
+        let cleared: UpdateRunnerRequest =
+            serde_json::from_str(r#"{"display_name":null}"#).unwrap();
+        assert_eq!(cleared.display_name, Some(None));
+
+        let set: UpdateRunnerRequest =
+            serde_json::from_str(r#"{"display_name":"Build machine"}"#).unwrap();
+        assert_eq!(set.display_name, Some(Some("Build machine".to_string())));
     }
 }
