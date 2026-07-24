@@ -1,4 +1,4 @@
-name: Final Deep Audit Diagnostics
+name: Final Deep Audit Failure Capture
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose-linux:
+  capture-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -19,15 +19,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Test utilities all targets
-        continue-on-error: true
-        run: cargo test -p test-utils --all-targets
-
-      - name: Workspace single-threaded
-        continue-on-error: true
-        run: cargo test --workspace --all-targets -- --test-threads=1
-
-      - name: Capture exact workspace failure
+      - name: Capture exact parallel workspace failure
         shell: bash
         run: |
           set +e
@@ -35,10 +27,8 @@ jobs:
           status=$?
           set -e
           if [[ $status -ne 0 ]]; then
-            echo "===== failure markers ====="
             grep -nE 'FAILED|failures:|panicked at|error: test failed|thread .* panicked' workspace-test.log || true
-            echo "===== final 240 lines ====="
-            tail -n 240 workspace-test.log
+            tail -n 160 workspace-test.log
             exit "$status"
           fi
           echo "Workspace tests passed"
