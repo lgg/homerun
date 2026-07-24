@@ -4,58 +4,74 @@ on:
   push:
     branches: [master]
 
+concurrency:
+  group: homerun-ci-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   update-badge:
     name: Update coverage badge
-    runs-on: self-hosted
+    runs-on: homerun-ci
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      - name: Verify preinstalled toolchain
+        run: |
+          set -euo pipefail
+          for tool in git node npm rustc cargo curl awk sed grep; do
+            command -v "$tool" >/dev/null 2>&1 || {
+              echo "::error::$tool is not installed on the homerun-ci runner"
+              exit 1
+            }
+          done
+          cargo llvm-cov --version >/dev/null 2>&1 || {
+            echo "::error::cargo-llvm-cov is not installed on the homerun-ci runner"
+            exit 1
+          }
 
-      - name: Install Node dependencies
-        run: cd apps/desktop && npm ci
+      - name: Install locked frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
 
       - name: Run React tests with coverage
-        run: cd apps/desktop && npm run test:coverage
+        working-directory: apps/desktop
+        run: npm run test:coverage
 
-      - name: Add Rust to PATH
-        run: |
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          echo "$(dirname "$(rustup which rustc)")" >> $GITHUB_PATH
-
-      - name: Install cargo-llvm-cov
-        run: which cargo-llvm-cov || cargo install cargo-llvm-cov --quiet
-
-      - name: Run tests with coverage
+      - name: Run Rust tests with coverage
         run: cargo llvm-cov -p homerund -p homerun --all-features --summary-only 2>&1 | tee coverage-summary.txt
-
-      - name: Clean Rust build artifacts
-        if: always()
-        run: cargo clean
 
       - name: Update badge
         env:
           GIST_SECRET: ${{ secrets.GIST_SECRET }}
         run: |
+          set -euo pipefail
           COVERAGE=$(grep "^TOTAL" coverage-summary.txt | grep -oE '[0-9]+\.[0-9]+%' | sed -n '3p' | sed 's/%//')
+          if ! [[ "$COVERAGE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            echo "::error::Could not parse line coverage from coverage-summary.txt"
+            cat coverage-summary.txt
+            exit 1
+          fi
+          if [[ -z "${GIST_SECRET:-}" ]]; then
+            echo "::error::GIST_SECRET is not configured"
+            exit 1
+          fi
           echo "Coverage: $COVERAGE%"
-          # Map 50-95% to hue 0(red)-120(green)
           HUE=$(awk "BEGIN {h=($COVERAGE-50)/(95-50)*120; if(h<0)h=0; if(h>120)h=120; printf \"%.0f\", h}")
-          # Build badge JSON and gist payload (no jq dependency)
           BADGE="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"hsl($HUE, 100%, 40%)\"}"
           PAYLOAD="{\"files\":{\"coverage.json\":{\"content\":$(printf '%s' "$BADGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')}}}"
-          curl -sf -X PATCH \
+          curl --fail --silent --show-error -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             https://api.github.com/gists/77f18f115b500bdc5d6df52f95d399b9
+
+      - name: Clean Rust build artifacts
+        if: always()
+        run: cargo clean
