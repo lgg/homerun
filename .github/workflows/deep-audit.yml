@@ -37,22 +37,37 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
-      - name: Apply reviewed audit patch
+      - name: Decode reviewed audit patch
         shell: bash
         run: |
           set -euo pipefail
           base64 --decode .github/maintenance/deep-audit-source.patch.gz.b64 \
             | gzip --decompress > /tmp/deep-audit-source.patch
+          test -s /tmp/deep-audit-source.patch
+          head -n 5 /tmp/deep-audit-source.patch
+
+      - name: Apply reviewed audit patch
+        shell: bash
+        run: |
+          set -euo pipefail
           if git apply --check /tmp/deep-audit-source.patch; then
             git apply /tmp/deep-audit-source.patch
           elif git apply --reverse --check /tmp/deep-audit-source.patch; then
             echo "Audit patch is already applied"
           else
             echo "Audit patch no longer applies cleanly in either direction" >&2
+            git apply --check --verbose /tmp/deep-audit-source.patch || true
+            git apply --reverse --check --verbose /tmp/deep-audit-source.patch || true
             exit 1
           fi
+
+      - name: Format and inspect source diff
+        shell: bash
+        run: |
+          set -euo pipefail
           cargo fmt --all
           git diff --check
+          git diff --stat
 
       - name: Install frontend dependencies
         working-directory: apps/desktop
