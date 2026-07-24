@@ -5291,13 +5291,13 @@ name"
     }
 
     #[tokio::test]
-    async fn test_create_rejects_duplicate_name_case_insensitive_across_repos() {
+    async fn test_create_rejects_duplicate_name_case_insensitive_within_repo() {
         let manager = create_test_manager();
-        // Same name (different case), different repo — still rejected: runner
-        // names must be globally unique (Docker container name is repo-agnostic).
+        // GitHub runner names are scoped to a repository. Case-insensitive
+        // duplicates must still be rejected inside that repository.
         manager
             .create(
-                "owner/repo-a",
+                "owner/repo",
                 Some("My-Runner".to_string()),
                 None,
                 None,
@@ -5308,7 +5308,7 @@ name"
             .unwrap();
         let err = manager
             .create(
-                "owner/repo-b",
+                "owner/repo",
                 Some("my-runner".to_string()),
                 None,
                 None,
