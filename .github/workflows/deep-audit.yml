@@ -41,34 +41,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/maintenance/deep-audit-patch/part-* \
-            | base64 --decode \
-            | gzip --decompress > /tmp/deep-audit-source.patch
+          for part in 00 01 02 03 04 05 06 07 08; do
+            git show "f64cbcae565a991b66a16b60f89152af4be20041:.github/maintenance/deep-audit-patch/part-${part}"
+          done | base64 --decode | gzip --decompress > /tmp/deep-audit-source.patch
           test -s /tmp/deep-audit-source.patch
           head -n 5 /tmp/deep-audit-source.patch
 
-      - name: Apply reviewed audit patch
+      - name: Apply reviewed audit patches
         shell: bash
         run: |
           set -euo pipefail
-          if git apply --check /tmp/deep-audit-source.patch; then
-            git apply /tmp/deep-audit-source.patch
-          elif git apply --reverse --check /tmp/deep-audit-source.patch; then
-            echo "Audit patch is already applied"
-          else
-            echo "Audit patch no longer applies cleanly in either direction" >&2
-            git apply --check --verbose /tmp/deep-audit-source.patch || true
-            git apply --reverse --check --verbose /tmp/deep-audit-source.patch || true
-            exit 1
-          fi
-          if git apply --check .github/maintenance/deep-audit-followup.patch; then
-            git apply .github/maintenance/deep-audit-followup.patch
-          elif git apply --reverse --check .github/maintenance/deep-audit-followup.patch; then
-            echo "Follow-up patch is already applied"
-          else
-            echo "Follow-up patch no longer applies cleanly" >&2
-            exit 1
-          fi
+          git apply --check /tmp/deep-audit-source.patch
+          git apply /tmp/deep-audit-source.patch
+          git apply --check .github/maintenance/deep-audit-incremental.patch
+          git apply .github/maintenance/deep-audit-incremental.patch
 
       - name: Format and inspect source diff
         shell: bash
@@ -144,9 +130,5 @@ jobs:
             crates/daemon/src/api/runners.rs \
             crates/daemon/src/runner/mod.rs \
             crates/daemon/src/runner/types.rs
-          if git diff --cached --quiet; then
-            echo "Validated source is already committed"
-            exit 0
-          fi
           git commit -m "fix: harden runner lifecycle after deep audit [audit-complete]"
           git push origin HEAD:agent/deep-audit-lifecycle-2026-07-24
