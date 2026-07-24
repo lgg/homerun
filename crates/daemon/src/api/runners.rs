@@ -201,6 +201,13 @@ pub async fn start_runner(
         .begin_start_operation(&id)
         .await
         .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    if let Err(error) = state.runner_manager.set_desired_running(&id, true).await {
+        state.runner_manager.finish_start_operation(&id).await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to persist start intent: {error}"),
+        ));
+    }
 
     let manager = state.runner_manager.clone();
     let runner_id = id.clone();

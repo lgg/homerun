@@ -1658,19 +1658,27 @@ impl RunnerManager {
         result
     }
 
-    async fn delete_reserved(&self, id: &str) -> Result<()> {
-        // Cancel future recovery first, then wait until any in-flight registration
-        // no longer uses the work directory. If it managed to start a process,
-        // stop that process before removing files.
-        self.set_desired_running(id, false).await?;
+    async fn prepare_delete_reserved(&self, id: &str) -> Result<()> {
+        // The deletion reservation already blocks new Start/Stop/PATCH operations.
+        // Wait before changing desired-running so a timeout leaves the runner and
+        // its recovery intent exactly as they were before the delete request.
         self.wait_for_mutations_to_finish(id).await?;
-        // An already-running start operation may have restored the intent after
-        // deletion first cleared it. Clear it again after the reservation drains.
         self.set_desired_running(id, false).await?;
-        if self.has_active_process(id).await {
+
+        let runner = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+        if runner.state == RunnerState::Online
+            || runner.state == RunnerState::Busy
+            || self.has_active_process(id).await
+        {
             self.stop_process_internal(id, true).await?;
         }
+        Ok(())
+    }
 
+    async fn remove_reserved(&self, id: &str) -> Result<()> {
         let _persistence_guard = self.persistence_lock.lock().await;
         let removed = self.runners.write().await.remove(id);
         if let Err(error) = self.save_to_disk_locked().await {
@@ -1690,6 +1698,12 @@ impl RunnerManager {
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
         }
         Ok(())
+    }
+
+    async fn delete_reserved(&self, id: &str) -> Result<()> {
+        self.prepare_delete_reserved(id).await?;
+        self.emit_state_event(id, "deleting");
+        self.remove_reserved(id).await
     }
 
     pub async fn update(&self, id: &str, req: types::UpdateRunnerRequest) -> Result<RunnerInfo> {
@@ -1849,9 +1863,9 @@ impl RunnerManager {
     }
 
     /// Start an existing Offline/Error runner while the caller retains the
-    /// start reservation. State cannot be exposed as Registering before admission.
+    /// start reservation. Manual API callers persist desired-running intent before
+    /// spawning this work; startup restore and recovery already have that intent.
     pub(crate) async fn start_existing_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
-        self.set_desired_running(id, true).await?;
         self.update_state(id, RunnerState::Registering).await?;
         self.emit_state_event(id, "registering");
         self.do_register_and_start(id, auth_token).await
@@ -1939,14 +1953,22 @@ impl RunnerManager {
         };
         let container_cfg = config.container.as_ref();
 
-        // If already configured, deregister before re-configuring.
-        // The config script refuses to configure an already-configured runner, so we
-        // must remove the old configuration first.
+        // If already configured, deregister before re-configuring. GitHub
+        // requires a dedicated remove token; a registration token is not valid for
+        // `config.sh remove` and previously left stale runners behind silently.
         if already_configured {
+            let removal = gh
+                .get_runner_remove_token(&config.repo_owner, &config.repo_name)
+                .await
+                .context("Failed to get runner removal token")?;
             if let (Some(dc), Some(cc)) = (&docker_client, container_cfg) {
-                let _ = docker::deregister(dc, &config.work_dir, &cc.image, &reg.token).await;
+                docker::deregister(dc, &config.work_dir, &cc.image, &removal.token)
+                    .await
+                    .context("Failed to deregister existing container runner")?;
             } else {
-                let _ = remove_runner(&config.work_dir, &reg.token).await;
+                remove_runner(&config.work_dir, &removal.token)
+                    .await
+                    .context("Failed to deregister existing runner")?;
             }
             clean_runner_config(&config.work_dir);
         }
@@ -2817,59 +2839,38 @@ impl RunnerManager {
     }
 
     async fn full_delete_reserved(&self, id: &str, auth_token: &str) -> Result<()> {
-        self.get(id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-
-        // Cancel recovery and serialize against an in-flight registration. The
-        // registration may finish while deletion is waiting; refresh state and
-        // stop any process it created before deregistration/removal.
-        self.set_desired_running(id, false).await?;
-        self.wait_for_mutations_to_finish(id).await?;
+        self.prepare_delete_reserved(id).await?;
         let runner = self
             .get(id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-        if runner.state == RunnerState::Online
-            || runner.state == RunnerState::Busy
-            || self.has_active_process(id).await
-        {
-            self.stop_process_internal(id, true)
-                .await
-                .context("Failed to stop runner before deletion")?;
-        }
-
-        // Try to transition to Deleting
-        {
-            let mut runners = self.runners.write().await;
-            if let Some(r) = runners.get_mut(id) {
-                // Force the state for deletion
-                r.state = RunnerState::Deleting;
-            }
-        }
         self.emit_state_event(id, "deleting");
 
-        // Deregister from GitHub
+        // Only configured runners have a GitHub registration to remove. Use the
+        // dedicated removal token and propagate failures so local deletion never
+        // silently leaves a stale remote runner behind.
         let config = &runner.config;
-        if let Ok(gh) = GitHubClient::new(Some(auth_token.to_string())) {
-            if let Ok(reg) = gh
-                .get_runner_registration_token(&config.repo_owner, &config.repo_name)
+        let configured = config.work_dir.join(".runner").exists()
+            || config.work_dir.join(".runner_migrated").exists();
+        if configured {
+            let gh = GitHubClient::new(Some(auth_token.to_string()))?;
+            let removal = gh
+                .get_runner_remove_token(&config.repo_owner, &config.repo_name)
                 .await
-            {
-                if let Some(cc) = config.container.as_ref() {
-                    if let Ok(dc) = docker::connect() {
-                        let _ =
-                            docker::deregister(&dc, &config.work_dir, &cc.image, &reg.token).await;
-                    }
-                } else {
-                    let _ = remove_runner(&config.work_dir, &reg.token).await;
-                }
+                .context("Failed to get runner removal token")?;
+            if let Some(cc) = config.container.as_ref() {
+                let dc = docker::connect()?;
+                docker::deregister(&dc, &config.work_dir, &cc.image, &removal.token)
+                    .await
+                    .context("Failed to deregister container runner")?;
+            } else {
+                remove_runner(&config.work_dir, &removal.token)
+                    .await
+                    .context("Failed to deregister runner")?;
             }
         }
 
-        // Remove runner entry and work dir while retaining the deletion reservation.
-        self.delete_reserved(id).await?;
-        Ok(())
+        self.remove_reserved(id).await
     }
 
     fn emit_state_event(&self, runner_id: &str, state: &str) {
@@ -3492,14 +3493,29 @@ name"
             tokio::task::yield_now().await;
         }
 
-        // Simulate the already-admitted start restoring desired-running after
-        // deletion's first clear, then allow that start operation to drain.
-        manager.set_desired_running(&id, true).await.unwrap();
+        // The deletion reservation blocks recovery/start admission, so Delete
+        // must not mutate user intent while waiting for the admitted start to drain.
+        assert!(manager.is_desired_running(&id).await);
         manager.finish_start_operation(&id).await;
         deletion.await.unwrap().unwrap();
 
         assert!(!manager.is_desired_running(&id).await);
         assert!(manager.get(&id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_full_delete_skips_remote_api_for_unconfigured_runner() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        manager.full_delete(&id, "not-a-real-token").await.unwrap();
+
+        assert!(manager.get(&id).await.is_none());
+        assert!(!manager.is_desired_running(&id).await);
     }
 
     #[tokio::test]

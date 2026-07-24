@@ -113,36 +113,46 @@ pub async fn start_group(
             && !state.runner_manager.has_active_process(&id).await
         {
             match state.runner_manager.begin_start_operation(&id).await {
-                Ok(()) => {
-                    let manager = state.runner_manager.clone();
-                    let runner_id = id.clone();
-                    let token = token.clone();
-                    tokio::spawn(async move {
-                        if let Err(error) =
-                            manager.start_existing_reserved(&runner_id, &token).await
-                        {
-                            tracing::error!(
-                                runner = %runner_id,
-                                error = %error,
-                                "Failed to start grouped runner"
-                            );
-                            let _ = manager
-                                .update_state_with_error(
-                                    &runner_id,
-                                    RunnerState::Error,
-                                    Some(format!("{error:#}")),
-                                )
-                                .await;
-                            manager.schedule_recovery(runner_id.clone());
-                        }
-                        manager.finish_start_operation(&runner_id).await;
-                    });
-                    results.push(GroupActionResult {
-                        runner_id: id,
-                        success: true,
-                        error: None,
-                    });
-                }
+                Ok(()) => match state.runner_manager.set_desired_running(&id, true).await {
+                    Ok(()) => {
+                        let manager = state.runner_manager.clone();
+                        let runner_id = id.clone();
+                        let token = token.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) =
+                                manager.start_existing_reserved(&runner_id, &token).await
+                            {
+                                tracing::error!(
+                                    runner = %runner_id,
+                                    error = %error,
+                                    "Failed to start grouped runner"
+                                );
+                                let _ = manager
+                                    .update_state_with_error(
+                                        &runner_id,
+                                        RunnerState::Error,
+                                        Some(format!("{error:#}")),
+                                    )
+                                    .await;
+                                manager.schedule_recovery(runner_id.clone());
+                            }
+                            manager.finish_start_operation(&runner_id).await;
+                        });
+                        results.push(GroupActionResult {
+                            runner_id: id,
+                            success: true,
+                            error: None,
+                        });
+                    }
+                    Err(error) => {
+                        state.runner_manager.finish_start_operation(&id).await;
+                        results.push(GroupActionResult {
+                            runner_id: id,
+                            success: false,
+                            error: Some(format!("Failed to persist start intent: {error}")),
+                        });
+                    }
+                },
                 Err(error) => results.push(GroupActionResult {
                     runner_id: id,
                     success: false,
@@ -261,50 +271,59 @@ pub async fn restart_group(
         }
 
         match state.runner_manager.begin_start_operation(&id).await {
-            Ok(()) => {
-                let manager = state.runner_manager.clone();
-                let runner_id = id.clone();
-                let token = token.clone();
-                tokio::spawn(async move {
-                    let result = async {
-                        manager.set_desired_running(&runner_id, true).await?;
-                        let current = manager
-                            .get(&runner_id)
-                            .await
-                            .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
-                        if current.state == RunnerState::Online
-                            || current.state == RunnerState::Busy
-                            || manager.has_active_process(&runner_id).await
-                        {
-                            manager.stop_process_internal(&runner_id, false).await?;
+            Ok(()) => match state.runner_manager.set_desired_running(&id, true).await {
+                Ok(()) => {
+                    let manager = state.runner_manager.clone();
+                    let runner_id = id.clone();
+                    let token = token.clone();
+                    tokio::spawn(async move {
+                        let result = async {
+                            let current = manager
+                                .get(&runner_id)
+                                .await
+                                .ok_or_else(|| anyhow::anyhow!("Runner not found"))?;
+                            if current.state == RunnerState::Online
+                                || current.state == RunnerState::Busy
+                                || manager.has_active_process(&runner_id).await
+                            {
+                                manager.stop_process_internal(&runner_id, false).await?;
+                            }
+                            manager.start_existing_reserved(&runner_id, &token).await
                         }
-                        manager.start_existing_reserved(&runner_id, &token).await
-                    }
-                    .await;
+                        .await;
 
-                    if let Err(error) = result {
-                        tracing::error!(
-                            runner = %runner_id,
-                            error = %error,
-                            "Failed to restart grouped runner"
-                        );
-                        let _ = manager
-                            .update_state_with_error(
-                                &runner_id,
-                                RunnerState::Error,
-                                Some(format!("{error:#}")),
-                            )
-                            .await;
-                        manager.schedule_recovery(runner_id.clone());
-                    }
-                    manager.finish_start_operation(&runner_id).await;
-                });
-                results.push(GroupActionResult {
-                    runner_id: id,
-                    success: true,
-                    error: None,
-                });
-            }
+                        if let Err(error) = result {
+                            tracing::error!(
+                                runner = %runner_id,
+                                error = %error,
+                                "Failed to restart grouped runner"
+                            );
+                            let _ = manager
+                                .update_state_with_error(
+                                    &runner_id,
+                                    RunnerState::Error,
+                                    Some(format!("{error:#}")),
+                                )
+                                .await;
+                            manager.schedule_recovery(runner_id.clone());
+                        }
+                        manager.finish_start_operation(&runner_id).await;
+                    });
+                    results.push(GroupActionResult {
+                        runner_id: id,
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    state.runner_manager.finish_start_operation(&id).await;
+                    results.push(GroupActionResult {
+                        runner_id: id,
+                        success: false,
+                        error: Some(format!("Failed to persist restart intent: {error}")),
+                    });
+                }
+            },
             Err(error) => results.push(GroupActionResult {
                 runner_id: id,
                 success: false,

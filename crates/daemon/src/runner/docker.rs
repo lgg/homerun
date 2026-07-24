@@ -140,9 +140,8 @@ pub async fn remove_container(docker: &Docker, container_id: &str) -> Result<()>
 
 /// Runs `config.sh remove --token <token>` in a short-lived helper
 /// container against the same bind-mounted `work_dir`, then removes the
-/// helper container. Best-effort: mirrors `process::remove_runner`'s
-/// behavior of logging (not failing) when GitHub-side removal doesn't
-/// succeed — the runner may need manual cleanup on GitHub.
+/// helper container. A non-zero config-script exit is returned to the caller:
+/// local deletion must not silently leave a stale runner registered on GitHub.
 pub async fn deregister(docker: &Docker, work_dir: &Path, image: &str, token: &str) -> Result<()> {
     // config.sh remove hits the same root guard as config.sh/run.sh.
     let env = vec![
@@ -154,18 +153,17 @@ pub async fn deregister(docker: &Docker, work_dir: &Path, image: &str, token: &s
     ];
     let name = format!("homerun-deregister-{}", uuid::Uuid::new_v4());
 
-    match create_and_start(docker, work_dir, image, &name, env, cmd).await {
-        Ok(container_id) => {
-            let _ = wait_container(docker, &container_id).await;
-            remove_container(docker, &container_id).await
-        }
-        Err(e) => {
-            tracing::warn!(
-                "Failed to start deregistration container — runner may need manual cleanup on GitHub: {e}"
-            );
-            Ok(())
-        }
+    let container_id = create_and_start(docker, work_dir, image, &name, env, cmd)
+        .await
+        .context("Failed to start runner deregistration container")?;
+    let wait_result = wait_container(docker, &container_id).await;
+    let cleanup_result = remove_container(docker, &container_id).await;
+    let exit_code = wait_result.context("Failed while waiting for runner deregistration")?;
+    cleanup_result?;
+    if exit_code != 0 {
+        anyhow::bail!("Runner deregistration container exited with code {exit_code}");
     }
+    Ok(())
 }
 
 /// Pulls `image` if needed, creates a container bind-mounting `work_dir` at
