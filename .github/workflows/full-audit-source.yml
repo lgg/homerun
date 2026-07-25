@@ -1,0 +1,27 @@
+name: Full Product Audit Snapshot
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.head_ref == 'audit/full-product-function-screen-audit-2026-07-25'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/full-product-function-screen-audit-2026-07-25
+      - name: Package source tree
+        run: |
+          tar --exclude=.git --exclude=target --exclude=node_modules --exclude=dist --exclude=coverage -czf /tmp/homerun-full-audit-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homerun-full-audit-source
+          path: /tmp/homerun-full-audit-source.tar.gz
+          retention-days: 1
