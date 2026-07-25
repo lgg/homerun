@@ -70,7 +70,9 @@ export function useScan() {
             break;
           case "warning":
             setScanError((current) =>
-              [current, `${data.repo ?? data.scan_type}: ${data.message}`].filter(Boolean).join("\n"),
+              [current, `${data.repo ?? data.scan_type}: ${data.message}`]
+                .filter(Boolean)
+                .join("\n"),
             );
             break;
           case "done":
@@ -84,7 +86,9 @@ export function useScan() {
           case "failed":
             activeScanIds.current.delete(data.scan_id);
             setScanError((current) =>
-              [current, `${data.scan_type} scan failed: ${data.message}`].filter(Boolean).join("\n"),
+              [current, `${data.scan_type} scan failed: ${data.message}`]
+                .filter(Boolean)
+                .join("\n"),
             );
             void finishIfIdle();
             break;
@@ -99,35 +103,38 @@ export function useScan() {
     };
   }, [finishIfIdle]);
 
-  const runScan = useCallback(async (options: ScanOptions) => {
-    const { workspacePath, authenticated } = options;
+  const runScan = useCallback(
+    async (options: ScanOptions) => {
+      const { workspacePath, authenticated } = options;
 
-    if (!workspacePath && !authenticated) {
-      setScanError("Configure a workspace path or sign in to scan.");
-      return;
-    }
+      if (!workspacePath && !authenticated) {
+        setScanError("Configure a workspace path or sign in to scan.");
+        return;
+      }
 
-    activeScanIds.current.clear();
-    launchPending.current = true;
-    scanningRef.current = true;
-    setScanning(true);
-    setScanError(null);
-    setProgressText("Starting scan...");
-
-    try {
-      const scanIds = await api.startScan(workspacePath, authenticated);
-      for (const id of scanIds) activeScanIds.current.add(id);
-      launchPending.current = false;
-      await finishIfIdle();
-    } catch (error) {
-      launchPending.current = false;
       activeScanIds.current.clear();
-      scanningRef.current = false;
-      setScanError(String(error));
-      setScanning(false);
-      setProgressText(null);
-    }
-  }, [finishIfIdle]);
+      launchPending.current = true;
+      scanningRef.current = true;
+      setScanning(true);
+      setScanError(null);
+      setProgressText("Starting scan...");
+
+      try {
+        const scanIds = await api.startScan(workspacePath, authenticated);
+        for (const id of scanIds) activeScanIds.current.add(id);
+        launchPending.current = false;
+        await finishIfIdle();
+      } catch (error) {
+        launchPending.current = false;
+        activeScanIds.current.clear();
+        scanningRef.current = false;
+        setScanError(String(error));
+        setScanning(false);
+        setProgressText(null);
+      }
+    },
+    [finishIfIdle],
+  );
 
   const cancelScan = useCallback(async () => {
     const ids = [...activeScanIds.current];

@@ -13,15 +13,8 @@ export function Repositories() {
   const navigate = useNavigate();
   const { repos, loading: reposLoading, error: reposError } = useRepos(auth.authenticated);
   const { runners, createRunner, createBatch } = useOutletContext<RunnersContextType>();
-  const {
-    discoveredRepos,
-    scanning,
-    lastScanAt,
-    scanError,
-    progressText,
-    runScan,
-    cancelScan,
-  } = useScan();
+  const { discoveredRepos, scanning, lastScanAt, scanError, progressText, runScan, cancelScan } =
+    useScan();
   const [search, setSearch] = useState("");
   const [showEnriched, setShowEnriched] = useState(true);
   const [wizardRepo, setWizardRepo] = useState<string | null>(null);
@@ -149,7 +142,6 @@ export function Repositories() {
       authenticated: auth.authenticated,
     });
   }
-
 
   return (
     <div className="page">
@@ -489,9 +481,7 @@ export function Repositories() {
                     className="btn btn-primary"
                     style={{ fontSize: 12, padding: "4px 12px" }}
                     onClick={() =>
-                      auth.authenticated
-                        ? setWizardRepo(repo.full_name)
-                        : navigate("/settings")
+                      auth.authenticated ? setWizardRepo(repo.full_name) : navigate("/settings")
                     }
                   >
                     {auth.authenticated ? "+ Add Runner" : "Sign in to add"}

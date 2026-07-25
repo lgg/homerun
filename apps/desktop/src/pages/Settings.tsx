@@ -31,7 +31,9 @@ export function Settings() {
   // App version
   const [appVersion, setAppVersion] = useState<string>("");
   useEffect(() => {
-    getVersion().then(setAppVersion);
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion("unknown"));
   }, []);
 
   // PAT section
