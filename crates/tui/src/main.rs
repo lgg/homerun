@@ -204,7 +204,7 @@ async fn run_tui() -> Result<()> {
 
     // Try to connect WebSocket for real-time updates
     if let Ok(ws_read) = client.connect_events().await {
-        start_ws_forwarding(event_tx, ws_read);
+        start_ws_forwarding(event_tx.clone(), ws_read);
     }
 
     if auto_login {
@@ -372,11 +372,10 @@ async fn handle_action(
             })
             .await
             .map(|_| ()),
-        Action::LoadRunnerLogs(id) => {
-            app.runner_logs = client.get_runner_logs(id).await?;
+        Action::LoadRunnerLogs(id) => client.get_runner_logs(id).await.map(|logs| {
+            app.runner_logs = logs;
             app.show_runner_logs = true;
-            Ok(())
-        }
+        }),
         Action::StartRunner(id) => client.start_runner(id).await,
         Action::StopRunner(id) => client.stop_runner(id).await,
         Action::RestartRunner(id) => client.restart_runner(id).await,
