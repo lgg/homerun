@@ -1,0 +1,34 @@
+name: Full Audit Rust Diagnostics
+
+on:
+  pull_request:
+    branches: [master]
+    types: [synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event.pull_request.number == 13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/full-product-function-screen-audit-2026-07-25
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture workspace tests
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-targets > /tmp/cargo-test.log 2>&1
+          echo "$?" > /tmp/cargo-test.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-audit-rust-diagnostics
+          path: |
+            /tmp/cargo-test.log
+            /tmp/cargo-test.status
+          retention-days: 1
