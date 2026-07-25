@@ -65,7 +65,7 @@ enum Commands {
         /// Comma-separated runner labels
         #[arg(long, value_delimiter = ',')]
         labels: Option<Vec<String>>,
-        /// Runner mode: app, service, or container
+        /// Runner mode: app or service; create container runners in the desktop app
         #[arg(long)]
         mode: Option<String>,
     },

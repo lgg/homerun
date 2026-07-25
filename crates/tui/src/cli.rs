@@ -182,6 +182,18 @@ async fn cmd_login(client: &DaemonClient, token: Option<String>) -> Result<()> {
     }
 }
 
+fn normalize_cli_mode(mode: Option<String>) -> Result<Option<String>> {
+    match mode.as_deref() {
+        None => Ok(None),
+        Some("app") => Ok(Some("app".to_string())),
+        Some("service") => Ok(Some("service".to_string())),
+        Some("container") => {
+            bail!("container runners require an image and must be created from the desktop app")
+        }
+        Some(other) => bail!("unsupported runner mode '{other}'; use app or service"),
+    }
+}
+
 async fn cmd_add(
     client: &DaemonClient,
     name: String,
@@ -190,6 +202,7 @@ async fn cmd_add(
     labels: Option<Vec<String>>,
     mode: Option<String>,
 ) -> Result<()> {
+    let mode = normalize_cli_mode(mode)?;
     if count == 0 || count > 10 {
         bail!("count must be between 1 and 10");
     }
@@ -237,9 +250,7 @@ async fn cmd_lifecycle(client: &DaemonClient, selector: &str, action: &str) -> R
 }
 
 async fn cmd_set_mode(client: &DaemonClient, selector: &str, mode: String) -> Result<()> {
-    if !matches!(mode.as_str(), "app" | "service" | "container") {
-        bail!("mode must be one of: app, service, container");
-    }
+    let mode = normalize_cli_mode(Some(mode))?.expect("set-mode always supplies a mode");
     let runner = resolve_runner(client, selector).await?;
     client
         .update_runner(&runner.config.id, None, Some(mode.clone()), None)
@@ -492,6 +503,24 @@ pub async fn cmd_scan(client: &DaemonClient, path: Option<String>, remote: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_cli_mode_accepts_native_modes() {
+        assert_eq!(
+            normalize_cli_mode(Some("app".into())).unwrap(),
+            Some("app".into())
+        );
+        assert_eq!(
+            normalize_cli_mode(Some("service".into())).unwrap(),
+            Some("service".into())
+        );
+    }
+
+    #[test]
+    fn test_normalize_cli_mode_rejects_container_without_config() {
+        let error = normalize_cli_mode(Some("container".into())).unwrap_err();
+        assert!(error.to_string().contains("desktop app"));
+    }
 
     #[test]
     fn test_cmd_about_succeeds() {

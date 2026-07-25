@@ -259,12 +259,12 @@ homerun --no-tui scan ~/workspace --remote
 
 # Authenticate and manage runners
 homerun --no-tui login
-homerun --no-tui add owner/repo --name build-1
-homerun --no-tui batch owner/repo 3 --name-prefix build
+homerun --no-tui add build-1 --repo owner/repo
+homerun --no-tui add build --repo owner/repo --count 3
 homerun --no-tui start build-1
 homerun --no-tui stop build-1
 homerun --no-tui restart build-1
-homerun --no-tui set-mode build-1 app-managed
+homerun --no-tui set-mode build-1 app
 homerun --no-tui remove build-1
 homerun --no-tui logout
 
