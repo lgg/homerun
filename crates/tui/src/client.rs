@@ -75,6 +75,14 @@ pub struct RunnerInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub runner_id: String,
+    pub timestamp: String,
+    pub line: String,
+    pub stream: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletedJob {
     pub job_name: String,
     pub succeeded: bool,
@@ -387,6 +395,20 @@ impl DaemonClient {
         }
     }
 
+    pub fn clone_connection(&self) -> Self {
+        #[cfg(unix)]
+        {
+            Self::new(self.socket_path.clone())
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                pipe_name: self.pipe_name.clone(),
+                tcp_addr: self.tcp_addr,
+            }
+        }
+    }
+
     /// Check if the daemon socket/pipe exists.
     pub fn socket_exists(&self) -> bool {
         #[cfg(unix)]
@@ -508,6 +530,17 @@ impl DaemonClient {
         Ok(serde_json::from_str(&body)?)
     }
 
+    pub async fn login_with_token(&self, token: &str) -> Result<AuthStatus> {
+        let body = serde_json::json!({ "token": token }).to_string();
+        let response = self.request("POST", "/auth/token", Some(body)).await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
+    pub async fn logout(&self) -> Result<()> {
+        self.request("POST", "/auth/logout", None).await?;
+        Ok(())
+    }
+
     pub async fn start_device_flow(&self) -> Result<DeviceFlowResponse> {
         let body = self.request("POST", "/auth/device", None).await?;
         Ok(serde_json::from_str(&body)?)
@@ -552,6 +585,36 @@ impl DaemonClient {
         Ok(serde_json::from_str(&body)?)
     }
 
+    pub async fn update_runner(
+        &self,
+        id: &str,
+        labels: Option<Vec<String>>,
+        mode: Option<String>,
+        display_name: Option<Option<String>>,
+    ) -> Result<RunnerInfo> {
+        let mut body = serde_json::Map::new();
+        if let Some(labels) = labels {
+            body.insert("labels".to_string(), serde_json::json!(labels));
+        }
+        if let Some(mode) = mode {
+            body.insert("mode".to_string(), serde_json::json!(mode));
+        }
+        if let Some(display_name) = display_name {
+            body.insert(
+                "display_name".to_string(),
+                display_name.map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+        }
+        let response = self
+            .request(
+                "PATCH",
+                &format!("/runners/{id}"),
+                Some(serde_json::Value::Object(body).to_string()),
+            )
+            .await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
     pub async fn delete_runner(&self, id: &str) -> Result<()> {
         self.request("DELETE", &format!("/runners/{id}"), None)
             .await?;
@@ -574,6 +637,13 @@ impl DaemonClient {
         self.request("POST", &format!("/runners/{id}/restart"), None)
             .await?;
         Ok(())
+    }
+
+    pub async fn get_runner_logs(&self, id: &str) -> Result<Vec<LogEntry>> {
+        let body = self
+            .request("GET", &format!("/runners/{id}/logs/recent"), None)
+            .await?;
+        Ok(serde_json::from_str(&body)?)
     }
 
     pub async fn list_repos(&self) -> Result<Vec<RepoInfo>> {
@@ -605,12 +675,14 @@ impl DaemonClient {
         &self,
         repo_full_name: &str,
         count: u8,
+        name_prefix: Option<String>,
         labels: Option<Vec<String>>,
         mode: Option<String>,
     ) -> Result<BatchCreateResponse> {
         let body = serde_json::json!({
             "repo_full_name": repo_full_name,
             "count": count,
+            "name_prefix": name_prefix,
             "labels": labels,
             "mode": mode,
         });
@@ -658,6 +730,24 @@ impl DaemonClient {
             )
             .await?;
         Ok(serde_json::from_str(&text)?)
+    }
+
+    pub async fn service_status(&self) -> Result<bool> {
+        let body = self.request("GET", "/service/status", None).await?;
+        let value: serde_json::Value = serde_json::from_str(&body)?;
+        value["installed"]
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!("missing installed field"))
+    }
+
+    pub async fn install_service(&self) -> Result<()> {
+        self.request("POST", "/service/install", None).await?;
+        Ok(())
+    }
+
+    pub async fn uninstall_service(&self) -> Result<()> {
+        self.request("POST", "/service/uninstall", None).await?;
+        Ok(())
     }
 
     pub async fn get_daemon_logs_recent(

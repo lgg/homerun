@@ -19,6 +19,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_positioner::init())
         .manage(AppState {
             client: Mutex::new(client),
@@ -28,7 +29,7 @@ pub fn run() {
             let check_updates = MenuItem::with_id(
                 app,
                 "check_updates",
-                "Check for Updates...",
+                "View Releases...",
                 true,
                 None::<&str>,
             )?;
@@ -117,7 +118,7 @@ pub fn run() {
                 match event.id().as_ref() {
                     "check_updates" => {
                         let _ = app_handle.opener().open_url(
-                            "https://github.com/aGallea/homerun/releases",
+                            "https://github.com/lgg/homerun/releases",
                             None::<&str>,
                         );
                     }
@@ -129,13 +130,13 @@ pub fn run() {
                     }
                     "open_github" => {
                         let _ = app_handle.opener().open_url(
-                            "https://github.com/aGallea/homerun",
+                            "https://github.com/lgg/homerun",
                             None::<&str>,
                         );
                     }
                     "report_issue" => {
                         let _ = app_handle.opener().open_url(
-                            "https://github.com/aGallea/homerun/issues/new/choose",
+                            "https://github.com/lgg/homerun/issues/new/choose",
                             None::<&str>,
                         );
                     }
@@ -165,18 +166,40 @@ pub fn run() {
                 }
             });
 
-            // -- Set up macOS notifications --
-            // In dev mode, impersonate Terminal so notifications are delivered.
-            // In production, use the app's own bundle identifier.
-            #[cfg(target_os = "macos")]
-            {
-                let bundle_id = if tauri::is_dev() {
-                    "com.apple.Terminal"
-                } else {
-                    "com.homerun.app"
-                };
-                let _ = mac_notification_sys::set_application(bundle_id);
-            }
+            // -- Forward daemon WebSocket events to every React window --
+            // Reconnect continuously so a daemon restart does not leave the desktop
+            // stuck on polling-only updates.
+            let event_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use futures::StreamExt;
+                use tokio_tungstenite::tungstenite::Message;
+
+                loop {
+                    let client = crate::client::DaemonClient::default_socket();
+                    match client.connect_events().await {
+                        Ok(mut events) => {
+                            while let Some(message) = events.next().await {
+                                match message {
+                                    Ok(Message::Text(text)) => {
+                                        match serde_json::from_str::<serde_json::Value>(&text) {
+                                            Ok(event) => {
+                                                let _ = event_handle.emit("runner-event", event);
+                                            }
+                                            Err(error) => {
+                                                eprintln!("Ignoring malformed daemon event: {error}");
+                                            }
+                                        }
+                                    }
+                                    Ok(Message::Close(_)) | Err(_) => break,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            });
 
             if let Some(main) = app.get_webview_window("main") {
                 window::install_main_window_close_handler(&main);
@@ -232,6 +255,7 @@ pub fn run() {
             commands::get_step_logs,
             commands::get_runner_history,
             commands::rerun_workflow,
+            commands::get_run_status,
             commands::clear_runner_history,
             commands::delete_history_entry,
             commands::update_tray_icon,

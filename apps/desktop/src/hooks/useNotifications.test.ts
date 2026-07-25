@@ -286,6 +286,24 @@ describe("useNotifications", () => {
     });
   });
 
+  it("sends Runner Deleted when the final runner disappears", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "last-runner", state: "online" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+
+    rerender({ runners: [], prefs });
+
+    await vi.waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
+        title: "Runner Deleted",
+        body: "last-runner was removed",
+        icon_path: "/resolved/resources/notifications/offline.png",
+      });
+    });
+  });
+
   it("does not send deleted notification when notify_status_changes is false", async () => {
     const prefs = makePrefs({ notify_status_changes: false });
     const initial = [makeRunner({ name: "r1" }), makeRunner({ name: "r2" })];

@@ -151,6 +151,8 @@ pub struct UpdateRunnerRequest {
 pub struct CreateBatchRequest {
     pub repo_full_name: String,
     pub count: u8,
+    #[serde(default)]
+    pub name_prefix: Option<String>,
     pub labels: Option<Vec<String>>,
     pub mode: Option<RunnerMode>,
     #[serde(default)]

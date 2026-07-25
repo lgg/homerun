@@ -677,17 +677,17 @@ export function Settings() {
               flexWrap: "wrap",
             }}
           >
-            <AboutLink href="https://github.com/aGallea/homerun" icon={<GitHubIcon />}>
+            <AboutLink href="https://github.com/lgg/homerun" icon={<GitHubIcon />}>
               Repository
             </AboutLink>
             <AboutLink
-              href="https://github.com/aGallea/homerun/issues/new?template=bug_report.md"
+              href="https://github.com/lgg/homerun/issues/new?template=bug_report.md"
               icon={<BugIcon />}
             >
               Report Bug
             </AboutLink>
             <AboutLink
-              href="https://github.com/aGallea/homerun/issues/new?template=feature_request.md"
+              href="https://github.com/lgg/homerun/issues/new?template=feature_request.md"
               icon={<FeatureIcon />}
             >
               Feature Request

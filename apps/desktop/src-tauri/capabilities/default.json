@@ -20,6 +20,7 @@
     "shell:allow-execute",
     "shell:allow-spawn",
     "positioner:default",
+    "notification:default",
     "core:resources:default"
   ]
 }

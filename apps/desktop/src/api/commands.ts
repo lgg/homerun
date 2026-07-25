@@ -54,7 +54,7 @@ export const api = {
 
   // Scan (streaming)
   startScan: (workspacePath: string | null, authenticated: boolean) =>
-    invoke<void>("start_scan", { workspace_path: workspacePath, authenticated }),
+    invoke<string[]>("start_scan", { workspace_path: workspacePath, authenticated }),
   cancelScan: (scanId: string) => invoke<unknown>("cancel_scan", { scan_id: scanId }),
   getScanResults: () => invoke<ScanResults | null>("get_scan_results"),
 

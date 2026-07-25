@@ -11,9 +11,17 @@ import { api } from "../api/commands";
 export function Repositories() {
   const { auth } = useAuth();
   const navigate = useNavigate();
-  const { repos, loading: reposLoading, error: reposError } = useRepos();
+  const { repos, loading: reposLoading, error: reposError } = useRepos(auth.authenticated);
   const { runners, createRunner, createBatch } = useOutletContext<RunnersContextType>();
-  const { discoveredRepos, scanning, lastScanAt, scanError, progressText, runScan } = useScan();
+  const {
+    discoveredRepos,
+    scanning,
+    lastScanAt,
+    scanError,
+    progressText,
+    runScan,
+    cancelScan,
+  } = useScan();
   const [search, setSearch] = useState("");
   const [showEnriched, setShowEnriched] = useState(true);
   const [wizardRepo, setWizardRepo] = useState<string | null>(null);
@@ -31,13 +39,13 @@ export function Repositories() {
 
   // Auto-scan on mount if enabled
   useEffect(() => {
-    if (preferences?.auto_scan && auth.authenticated) {
-      runScan({
+    if (preferences?.auto_scan && (preferences.workspace_path || auth.authenticated)) {
+      void runScan({
         workspacePath: preferences.workspace_path,
         authenticated: auth.authenticated,
       });
     }
-  }, [preferences?.auto_scan]);
+  }, [preferences?.auto_scan, preferences?.workspace_path, auth.authenticated, runScan]);
 
   // Count runners per repo full_name
   const runnerCountByRepo = useMemo(() => {
@@ -142,26 +150,6 @@ export function Repositories() {
     });
   }
 
-  if (!auth.authenticated) {
-    return (
-      <div className="page">
-        <div className="page-header">
-          <h1 className="page-title">Repositories</h1>
-        </div>
-        <div className="card" style={{ textAlign: "center", padding: "60px 40px" }}>
-          <p style={{ fontSize: 15, color: "var(--text-primary)", marginBottom: 8 }}>
-            Sign in to view your repositories
-          </p>
-          <p className="text-muted" style={{ fontSize: 13, marginBottom: 20 }}>
-            Connect your GitHub account to browse repositories and add runners.
-          </p>
-          <button className="btn btn-primary" onClick={() => navigate("/settings")}>
-            Sign in with GitHub
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="page">
@@ -177,14 +165,36 @@ export function Repositories() {
               {showEnriched ? "Plain view" : "Enriched view"}
             </button>
           )}
-          <button className="btn btn-secondary" onClick={handleScan} disabled={scanning}>
-            {scanning ? "Scanning..." : "Scan"}
-          </button>
-          <button className="btn btn-primary" onClick={() => setWizardRepo("")}>
-            + Add Runner
-          </button>
+          {scanning ? (
+            <button className="btn btn-secondary" onClick={() => void cancelScan()}>
+              Cancel scan
+            </button>
+          ) : (
+            <button className="btn btn-secondary" onClick={handleScan}>
+              Scan
+            </button>
+          )}
+          {auth.authenticated ? (
+            <button className="btn btn-primary" onClick={() => setWizardRepo("")}>
+              + Add Runner
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => navigate("/settings")}>
+              Sign in for remote repos
+            </button>
+          )}
         </div>
       </div>
+
+      {!auth.authenticated && (
+        <div className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
+          <strong style={{ fontSize: 13 }}>Local discovery is available without signing in.</strong>
+          <div className="text-muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Configure a workspace path and scan local repositories. Sign in only to browse GitHub
+            repositories or create runners.
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <div style={{ marginBottom: 20 }}>
@@ -309,13 +319,13 @@ export function Repositories() {
         </div>
       )}
 
-      {reposError && (
+      {auth.authenticated && reposError && (
         <div className="error-banner" style={{ marginBottom: 16 }}>
           {reposError}
         </div>
       )}
 
-      {reposLoading ? (
+      {auth.authenticated && reposLoading ? (
         <p className="text-muted">Loading repositories...</p>
       ) : filteredRepos.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: "40px" }}>
@@ -323,7 +333,11 @@ export function Repositories() {
             {search ? "No repositories match your search." : "No repositories found."}
           </p>
           <p className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Make sure you are authenticated with a GitHub token that has repo access.
+            {auth.authenticated
+              ? "Check repository access or run discovery again."
+              : preferences?.workspace_path
+                ? "Run a local scan, or sign in to include GitHub repositories."
+                : "Configure a workspace path in Settings to discover local repositories."}
           </p>
         </div>
       ) : (
@@ -373,13 +387,21 @@ export function Repositories() {
                           fontSize: 11,
                           padding: "2px 8px",
                           borderRadius: 10,
-                          background: repo.private
-                            ? "rgba(210, 153, 34, 0.2)"
-                            : "rgba(63, 185, 80, 0.2)",
-                          color: repo.private ? "var(--accent-yellow)" : "var(--accent-green)",
+                          background:
+                            repo.id === 0
+                              ? "rgba(31, 111, 235, 0.2)"
+                              : repo.private
+                                ? "rgba(210, 153, 34, 0.2)"
+                                : "rgba(63, 185, 80, 0.2)",
+                          color:
+                            repo.id === 0
+                              ? "var(--accent-blue)"
+                              : repo.private
+                                ? "var(--accent-yellow)"
+                                : "var(--accent-green)",
                         }}
                       >
-                        {repo.private ? "Private" : "Public"}
+                        {repo.id === 0 ? "Local" : repo.private ? "Private" : "Public"}
                       </span>
                       {repo.is_org && (
                         <span
@@ -466,9 +488,13 @@ export function Repositories() {
                   <button
                     className="btn btn-primary"
                     style={{ fontSize: 12, padding: "4px 12px" }}
-                    onClick={() => setWizardRepo(repo.full_name)}
+                    onClick={() =>
+                      auth.authenticated
+                        ? setWizardRepo(repo.full_name)
+                        : navigate("/settings")
+                    }
                   >
-                    + Add Runner
+                    {auth.authenticated ? "+ Add Runner" : "Sign in to add"}
                   </button>
                 </div>
               </div>
