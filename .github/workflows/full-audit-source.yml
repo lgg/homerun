@@ -1,4 +1,4 @@
-name: Full Product Audit Diagnostics
+name: Full Product Audit Validation
 
 on:
   pull_request:
@@ -6,17 +6,143 @@ on:
     types: [synchronize]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  frontend:
+  finalize:
     if: github.head_ref == 'audit/full-product-function-screen-audit-2026-07-25'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           ref: audit/full-product-function-screen-audit-2026-07-25
+          fetch-depth: 0
+      - name: Apply remaining product and documentation fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def rewrite(path: str, transform):
+              file = Path(path)
+              before = file.read_text()
+              after = transform(before)
+              if before != after:
+                  file.write_text(after)
+
+          def readme(s: str) -> str:
+              s = s.replace('One-click GitHub Actions self-hosted runners for macOS & Windows', 'One-click GitHub Actions self-hosted runners for macOS, Windows & Linux')
+              s = s.replace('https://github.com/aGallea/homerun', 'https://github.com/lgg/homerun')
+              s = s.replace('HomeRun runs on **macOS** and **Windows**, with Linux support planned.', 'HomeRun runs on **macOS**, **Windows**, and **Linux**. Login startup is built in on macOS and Windows; Linux service integration is still manual.')
+              s = s.replace('- **Real-time metrics** — CPU/RAM per runner via live WebSocket updates', '- **Runner metrics** — CPU/RAM polling with WebSocket lifecycle events for immediate dashboard refresh')
+              s = s.replace('- **Cross-platform** — macOS (launchd auto-start, native notifications) and Windows (Task Scheduler auto-start, named pipe IPC)', '- **Cross-platform** — macOS (launchd), Windows (Registry Run + named-pipe IPC), and Linux; desktop notifications use the Tauri notification API')
+              s = s.replace('3. Launch HomeRun from the Start Menu — go to Settings > Startup > "Launch at login" to auto-start the daemon via Task Scheduler', '3. Launch HomeRun from the Start Menu — go to Settings > Startup > "Launch at login" to auto-start the daemon through the current user Registry Run entry')
+              linux_install = '''### Install (Linux — AppImage / deb)\n\nDownload the latest `.AppImage` or `.deb` from [Releases](https://github.com/lgg/homerun/releases). The daemon and TUI are also published as an `x86_64-unknown-linux-gnu` tarball. Linux login startup is not installed automatically yet; launch `homerund` yourself or configure your preferred user service manager.\n\n'''
+              if '### Install (Linux — AppImage / deb)' not in s:
+                  s = s.replace('### Build from Source\n', linux_install + '### Build from Source\n')
+              cli_marker = '''# Manage the daemon\nhomerun --no-tui daemon start\nhomerun --no-tui daemon stop\nhomerun --no-tui daemon restart\n'''
+              cli_replacement = '''# Authenticate and manage runners\nhomerun --no-tui login\nhomerun --no-tui add owner/repo --name build-1\nhomerun --no-tui batch owner/repo 3 --name-prefix build\nhomerun --no-tui start build-1\nhomerun --no-tui stop build-1\nhomerun --no-tui restart build-1\nhomerun --no-tui set-mode build-1 app-managed\nhomerun --no-tui remove build-1\nhomerun --no-tui logout\n\n# Manage the daemon and login startup\nhomerun --no-tui daemon start\nhomerun --no-tui daemon stop\nhomerun --no-tui daemon restart\nhomerun --no-tui daemon autostart status\nhomerun --no-tui daemon autostart enable\nhomerun --no-tui daemon autostart disable\n'''
+              s = s.replace(cli_marker, cli_replacement)
+              s = s.replace('| Auto-start         | macOS launchd / Windows Task Scheduler                                       |', '| Auto-start         | macOS launchd / Windows Registry Run; Linux manual                          |')
+              s = s.replace('| Notifications      | macOS native (`mac-notification-sys`)                                        |', '| Notifications      | Tauri notification plugin (macOS / Windows / Linux)                         |')
+              s = re.sub(r'## Roadmap\n.*?## Requirements\n', '''## Roadmap\n\n| Feature                    | Description                                                               |\n| -------------------------- | ------------------------------------------------------------------------- |\n| Step-level live logs       | Capture every workflow step locally with lower-latency progress updates   |\n| Docker execution controls  | Resource limits and ephemeral container cleanup policies                  |\n| Kubernetes backend         | Manage runners as pods in a Kubernetes cluster                            |\n| Linux service integration  | Built-in systemd user-service installation and login startup              |\n| Organization-level runners | Manage runners at the GitHub organization level, not only per repository  |\n\nPriorities depend on user interest and verified platform demand.\n\n## Requirements\n''', s, flags=re.S)
+              s = s.replace('**Both platforms:**\n\n- A GitHub account', '**Linux:**\n\n- A modern x86_64 distribution with WebKitGTK 4.1 for the desktop app\n- Manual daemon startup or a user-managed service\n\n**All platforms:**\n\n- A GitHub account')
+              s = re.sub(r'Re-authenticate by running the Device Flow login again from the TUI or desktop app\. If you\'re using a PAT, ensure it has the `repo` and `admin:org` scopes\. You can also clear the stored token from macOS Keychain:\n\n```sh\nsecurity delete-generic-password -s "homerun" -a "github_token"\n```', '''Re-authenticate with Device Flow from the TUI or desktop app, or run `homerun --no-tui login`. For a PAT, grant only the repository and runner-administration permissions you need. HomeRun stores the token in `~/.homerun/auth.json` with owner-only permissions on Unix; `homerun --no-tui logout` removes it.''', s)
+              s = s.replace('Or enable "Launch at login" in Settings > Startup to have it start automatically (via launchd on macOS, Task Scheduler on Windows).', 'Or enable "Launch at login" in Settings > Startup to have it start automatically via launchd on macOS or the current-user Registry Run entry on Windows. Linux startup is currently configured manually.')
+              return s
+
+          rewrite('README.md', readme)
+
+          def architecture(s: str) -> str:
+              s = s.replace('The token is stored in the **macOS Keychain** and restored automatically on daemon restart.', 'The token is stored in `~/.homerun/auth.json` and restored automatically on daemon restart. Unix builds restrict the file to the current user.')
+              s = s.replace('The daemon exposes an HTTP API over a Unix socket at `~/.homerun/daemon.sock`.', 'The daemon exposes its HTTP API over `~/.homerun/daemon.sock` on macOS/Linux and a named pipe on Windows.')
+              s = s.replace('- **Native macOS integration** — FFI to macOS Keychain (`security-framework`), launchd, and system notifications without a runtime', '- **Platform integration** — launchd on macOS, current-user Registry startup and named-pipe IPC on Windows, plus Tauri desktop notifications')
+              return s
+
+          rewrite('docs/ARCHITECTURE.md', architecture)
+
+          def service(s: str) -> str:
+              s = s.replace('{home}/logs/daemon.log', '{home}/.homerun/logs/daemon.log')
+              s = s.replace('{home}/logs/daemon.err', '{home}/.homerun/logs/daemon.err')
+              needle = '        let plist_path = plist_path()?;\n\n        // Ensure parent directory exists\n'
+              replacement = '''        let plist_path = plist_path()?;\n        let log_dir = dirs::home_dir()\n            .context("Could not determine home directory")?\n            .join(".homerun/logs");\n        std::fs::create_dir_all(&log_dir)\n            .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;\n\n        // Ensure parent directory exists\n'''
+              s = s.replace(needle, replacement)
+              return s
+
+          rewrite('crates/daemon/src/platform/service.rs', service)
+
+          def auth(s: str) -> str:
+              replacements = {
+                  'previously saved token from the keychain': 'previously saved token from the credential store',
+                  'Restored GitHub authentication from keychain': 'Restored GitHub authentication from the credential store',
+                  'leave the token in keychain': 'leave the token in the credential store',
+                  'store it in the keychain': 'store it in the credential store',
+                  'Remove the token from keychain': 'Remove the token from the credential store',
+                  'keychain cleanup': 'credential-store cleanup',
+                  'loaded (triggers lazy keychain restore': 'loaded (triggers lazy credential-store restore',
+                  'restore from keychain': 'restore from the credential store',
+                  'Lazily restored auth token from keychain': 'Lazily restored auth token from the credential store',
+                  'stores the token in the keychain': 'stores the token in the credential store',
+                  'Failed to store token in keychain': 'Failed to store token in the credential store',
+                  'Token stored in macOS Keychain': 'Token stored in the HomeRun credential store',
+              }
+              for old, new in replacements.items():
+                  s = s.replace(old, new)
+              return s
+
+          rewrite('crates/daemon/src/auth/mod.rs', auth)
+
+          def server(s: str) -> str:
+              return s.replace('Failed to restore auth from keychain', 'Failed to restore auth from the credential store')
+
+          rewrite('crates/daemon/src/server.rs', server)
+
+          def commands(s: str) -> str:
+              s = s.replace('// Uninstall the launchd service, then retry shutdown', '// Uninstall the platform startup service, then retry shutdown')
+              s = s.replace('Failed to uninstall launchd service', 'Failed to uninstall daemon startup service')
+              return s
+
+          rewrite('apps/desktop/src-tauri/src/commands.rs', commands)
+
+          def release(s: str) -> str:
+              s = s.replace("if: ${{ github.ref_type == 'tag' && github.repository == 'aGallea/homerun' }}", "if: ${{ github.ref_type == 'tag' && vars.HOMEBREW_TAP_REPOSITORY != '' }}")
+              s = s.replace('          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}\n', '          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}\n          HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY }}\n')
+              s = s.replace('gh api repos/aGallea/homebrew-homerun/dispatches', 'gh api "repos/${HOMEBREW_TAP_REPOSITORY}/dispatches"')
+              return s
+
+          rewrite('.github/workflows/release-build.yml', release)
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit remaining fixes
+        run: |
+          if git diff --quiet; then
+            echo 'No remaining audit fixes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: align documentation and platform integrations'
+          git push origin HEAD:audit/full-product-function-screen-audit-2026-07-25
+
+  linux:
+    needs: finalize
+    if: github.head_ref == 'audit/full-product-function-screen-audit-2026-07-25'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/full-product-function-screen-audit-2026-07-25
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -25,27 +151,68 @@ jobs:
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
-      - name: Capture frontend tests
-        shell: bash
+      - name: Frontend tests
         working-directory: apps/desktop
-        run: |
-          set +e
-          npm test > /tmp/frontend-tests.log 2>&1
-          echo "$?" > /tmp/frontend-tests.status
-          exit 0
-      - uses: actions/upload-artifact@v4
+        run: npm test
+      - name: Type check
+        working-directory: apps/desktop
+        run: npm exec -- tsc --noEmit
+      - name: Frontend production build
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Release daemon and TUI build
+        run: cargo build --release -p homerund -p homerun
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
+      - name: Linux Tauri check
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+
+  windows:
+    needs: finalize
+    if: github.head_ref == 'audit/full-product-function-screen-audit-2026-07-25'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
         with:
-          name: full-audit-frontend-diagnostics
-          path: |
-            /tmp/frontend-tests.log
-            /tmp/frontend-tests.status
-          retention-days: 1
-      - name: Report failures
+          ref: audit/full-product-function-screen-audit-2026-07-25
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install frontend dependencies
         working-directory: apps/desktop
-        run: |
-          status=$(cat /tmp/frontend-tests.status)
-          if [[ "$status" != '0' ]]; then
-            grep -nE 'FAIL|AssertionError|expected|received|Error:' /tmp/frontend-tests.log || true
-            tail -n 250 /tmp/frontend-tests.log
-          fi
-          exit "$status"
+        run: npm ci
+      - name: Frontend tests
+        working-directory: apps/desktop
+        run: npm test
+      - name: Type check
+        working-directory: apps/desktop
+        run: npm exec -- tsc --noEmit
+      - name: Frontend production build
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Rust workspace tests
+        run: cargo test --workspace --all-targets
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Release daemon and TUI build
+        run: cargo build --release -p homerund -p homerun
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
+      - name: Windows Tauri check
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
