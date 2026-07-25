@@ -293,7 +293,9 @@ impl DaemonClient {
             let _ = connection.await;
         });
 
-        let response = sender.send_request(Self::http_request(method, path, body)?).await?;
+        let response = sender
+            .send_request(Self::http_request(method, path, body)?)
+            .await?;
         let status = response.status();
         let bytes = response.into_body().collect().await?.to_bytes();
         Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
@@ -324,7 +326,9 @@ impl DaemonClient {
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        let response = sender.send_request(Self::http_request(method, path, body)?).await?;
+        let response = sender
+            .send_request(Self::http_request(method, path, body)?)
+            .await?;
         let status = response.status();
         let bytes = response.into_body().collect().await?.to_bytes();
         Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
@@ -564,11 +568,7 @@ impl DaemonClient {
     pub async fn scale_group(&self, group_id: &str, count: u32) -> Result<ScaleGroupResponse> {
         let body = serde_json::json!({ "count": count }).to_string();
         let response = self
-            .request(
-                "PATCH",
-                &format!("/runners/groups/{group_id}"),
-                Some(body),
-            )
+            .request("PATCH", &format!("/runners/groups/{group_id}"), Some(body))
             .await?;
         Ok(serde_json::from_str(&response)?)
     }
@@ -589,7 +589,7 @@ impl DaemonClient {
     }
 
     pub async fn daemon_logs(&self, level: Option<&str>) -> Result<Vec<DaemonLogEntry>> {
-        let query = level.map(|l| format!("?level={l}")) .unwrap_or_default();
+        let query = level.map(|l| format!("?level={l}")).unwrap_or_default();
         let body = self
             .request("GET", &format!("/daemon/logs/recent{query}"), None)
             .await?;
