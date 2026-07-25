@@ -1,125 +1,107 @@
 use anyhow::{bail, Context, Result};
-use bytes::Bytes;
-use futures_util::StreamExt;
-use http_body_util::{BodyExt, Full};
-use hyper::{Method, Request, StatusCode};
-use hyper_util::rt::TokioIo;
+use futures::stream::SplitStream;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use tokio::net::UnixStream;
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+use tokio_tungstenite::WebSocketStream;
 
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::ClientOptions;
+/// Percent-encode a string for use in a URL query parameter.
+fn url_encode(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(b as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    encoded
+}
 
-use homerun_common::ipc::{self, daemon_endpoint};
+use hyper::Request;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+
+// --- Response types (mirror daemon's API responses) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerConfig {
     pub id: String,
     pub name: String,
+    #[serde(default)]
     pub display_name: Option<String>,
     pub repo_owner: String,
     pub repo_name: String,
     pub labels: Vec<String>,
-    pub mode: RunnerMode,
+    pub mode: String,
     pub work_dir: PathBuf,
-    pub runner_version: Option<String>,
+    #[serde(default)]
     pub group_id: Option<String>,
-    pub container: Option<ContainerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContainerConfig {
-    pub image: String,
-    pub memory_limit: Option<u64>,
-    pub cpu_limit: Option<f64>,
-    pub env: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunnerMode {
-    AppManaged,
-    Service,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RunnerState {
-    Creating,
-    Registering,
-    Online,
-    Busy,
-    Stopping,
-    Offline,
-    Error,
-    Deleting,
-}
-
-impl RunnerState {
-    pub fn is_active(&self) -> bool {
-        matches!(self, Self::Online | Self::Busy)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurrentJob {
-    pub name: String,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub workflow_name: Option<String>,
-    pub repository: Option<String>,
-    pub branch: Option<String>,
-    pub commit_sha: Option<String>,
-    pub run_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobHistoryEntry {
-    pub id: String,
-    pub job_name: String,
-    pub workflow_name: Option<String>,
-    pub repository: Option<String>,
-    pub branch: Option<String>,
-    pub commit_sha: Option<String>,
-    pub run_url: Option<String>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub completed_at: chrono::DateTime<chrono::Utc>,
-    pub succeeded: bool,
-    pub duration_seconds: u64,
+pub struct JobContext {
+    pub branch: String,
+    pub pr_number: Option<u64>,
+    pub pr_url: Option<String>,
+    pub run_url: String,
+    #[serde(default)]
+    pub job_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerInfo {
     pub config: RunnerConfig,
-    pub state: RunnerState,
+    pub state: String,
     pub pid: Option<u32>,
+    pub uptime_secs: Option<u64>,
+    pub jobs_completed: u32,
+    pub jobs_failed: u32,
+    #[serde(default)]
     pub current_job: Option<String>,
-    pub current_job_info: Option<CurrentJob>,
-    pub last_completed_job: Option<JobHistoryEntry>,
-    pub error_message: Option<String>,
-    pub cpu_percent: f32,
-    pub memory_bytes: u64,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub job_context: Option<JobContext>,
+    #[serde(default)]
+    pub job_started_at: Option<String>,
+    #[serde(default)]
+    pub estimated_job_duration_secs: Option<u64>,
+    #[serde(default)]
+    pub last_completed_job: Option<CompletedJob>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetricsResponse {
-    pub system: SystemMetrics,
-    pub runners: Vec<RunnerMetrics>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SystemMetrics {
-    pub cpu_percent: f32,
-    pub memory_used: u64,
-    pub memory_total: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunnerMetrics {
+pub struct LogEntry {
     pub runner_id: String,
-    pub cpu_percent: f32,
-    pub memory_bytes: u64,
+    pub timestamp: String,
+    pub line: String,
+    pub stream: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletedJob {
+    pub job_name: String,
+    pub succeeded: bool,
+    pub completed_at: String,
+    pub duration_secs: u64,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub pr_number: Option<u64>,
+    #[serde(default)]
+    pub run_url: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubUser {
+    pub login: String,
+    pub avatar_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,10 +111,103 @@ pub struct AuthStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GitHubUser {
-    pub login: String,
+pub struct SystemMetrics {
+    pub cpu_percent: f64,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
+    pub disk_used_bytes: u64,
+    pub disk_total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunnerMetrics {
+    pub runner_id: String,
+    pub cpu_percent: f64,
+    pub memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonLogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonMetrics {
+    pub pid: u32,
+    pub uptime_seconds: u64,
+    pub cpu_percent: f64,
+    pub memory_bytes: u64,
+    pub child_processes: Vec<ChildProcessInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildProcessInfo {
+    pub pid: u32,
+    pub runner_id: String,
+    pub runner_name: String,
+    pub cpu_percent: f64,
+    pub memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsResponse {
+    pub system: SystemMetrics,
+    pub runners: Vec<RunnerMetrics>,
+    #[serde(default)]
+    pub daemon: Option<DaemonMetrics>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoInfo {
+    pub id: u64,
+    pub full_name: String,
+    pub name: String,
+    pub owner: String,
+    pub private: bool,
+    pub html_url: String,
+    pub is_org: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredRepo {
+    pub full_name: String,
+    pub source: String,
+    pub workflow_files: Vec<String>,
+    pub local_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub matched_labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalScanRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRunnerRequest {
+    pub repo_full_name: String,
     pub name: Option<String>,
-    pub avatar_url: String,
+    pub labels: Option<Vec<String>>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepInfo {
+    pub number: u16,
+    pub name: String,
+    pub status: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepsResponse {
+    pub job_name: String,
+    pub steps: Vec<StepInfo>,
+    pub steps_discovered: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,73 +220,39 @@ pub struct DeviceFlowResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoInfo {
-    pub full_name: String,
-    pub private: bool,
-    pub default_branch: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveredRepo {
-    pub full_name: String,
-    pub source: String,
-    pub workflow_files: Vec<String>,
-    pub local_path: Option<String>,
-    pub matched_labels: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
+pub struct RunnerEvent {
     pub runner_id: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub line: String,
-    pub stream: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StepInfo {
-    pub number: u32,
-    pub name: String,
-    pub status: String,
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub conclusion: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StepsResponse {
-    pub runner_id: String,
-    pub steps: Vec<StepInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DaemonLogEntry {
+    pub event_type: String,
+    pub data: serde_json::Value,
     pub timestamp: String,
-    pub level: String,
-    pub target: String,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceStatusResponse {
-    pub installed: bool,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateRunnerRequest {
-    pub repo_full_name: String,
-    pub name: Option<String>,
-    pub labels: Option<Vec<String>>,
-    pub mode: Option<RunnerMode>,
-    pub group_id: Option<String>,
-    pub container: Option<ContainerConfig>,
+pub struct JobHistoryEntry {
+    pub job_name: String,
+    pub started_at: String,
+    pub completed_at: String,
+    pub succeeded: bool,
+    pub branch: Option<String>,
+    pub pr_number: Option<u64>,
+    pub run_url: Option<String>,
+    #[serde(default)]
+    pub duration_secs: u64,
+    #[serde(default)]
+    pub job_number: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchCreateResponse {
-    pub runners: Vec<RunnerInfo>,
     pub group_id: String,
+    pub runners: Vec<RunnerInfo>,
+    pub errors: Vec<BatchCreateError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchCreateError {
+    pub index: u8,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,127 +271,235 @@ pub struct GroupActionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScaleGroupResponse {
     pub group_id: String,
-    pub target_count: u32,
+    pub previous_count: u8,
+    pub target_count: u8,
+    pub actual_count: u8,
     pub added: Vec<RunnerInfo>,
     pub removed: Vec<String>,
+    pub skipped_busy: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DockerStatusResponse {
-    pub available: bool,
-    pub version: Option<String>,
-    pub error: Option<String>,
+// --- Platform-aware HTTP connectors ---
+
+/// A tower connector that dials a Unix socket instead of TCP.
+#[cfg(unix)]
+#[derive(Clone)]
+struct UnixConnector {
+    socket_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DaemonClient {
-    endpoint: String,
-}
+#[cfg(unix)]
+impl tower::Service<hyper::Uri> for UnixConnector {
+    type Response = hyper_util::rt::TokioIo<tokio::net::UnixStream>;
+    type Error = std::io::Error;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
 
-impl Default for DaemonClient {
-    fn default() -> Self {
-        Self::new(daemon_endpoint())
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
     }
+
+    fn call(&mut self, _uri: hyper::Uri) -> Self::Future {
+        let path = self.socket_path.clone();
+        Box::pin(async move {
+            let stream = tokio::net::UnixStream::connect(path).await?;
+            Ok(hyper_util::rt::TokioIo::new(stream))
+        })
+    }
+}
+
+/// A tower connector that dials a Windows named pipe instead of TCP.
+#[cfg(windows)]
+#[derive(Clone)]
+struct NamedPipeConnector {
+    pipe_name: String,
+}
+
+#[cfg(windows)]
+impl tower::Service<hyper::Uri> for NamedPipeConnector {
+    type Response = hyper_util::rt::TokioIo<tokio::net::windows::named_pipe::NamedPipeClient>;
+    type Error = std::io::Error;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+    >;
+
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _uri: hyper::Uri) -> Self::Future {
+        let pipe_name = self.pipe_name.clone();
+        Box::pin(async move {
+            let client = tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name)?;
+            Ok(hyper_util::rt::TokioIo::new(client))
+        })
+    }
+}
+
+// --- DaemonClient ---
+
+pub struct DaemonClient {
+    #[cfg(unix)]
+    socket_path: PathBuf,
+    #[cfg(windows)]
+    pipe_name: String,
+    /// TCP address for testing on Windows (mock daemon uses TCP).
+    #[cfg(windows)]
+    tcp_addr: Option<std::net::SocketAddr>,
 }
 
 impl DaemonClient {
-    pub fn new(endpoint: String) -> Self {
-        Self { endpoint }
-    }
-
-    pub fn socket_path(&self) -> &Path {
-        Path::new(&self.endpoint)
-    }
-
-    fn http_request(
-        method: &str,
-        path: &str,
-        body: Option<String>,
-    ) -> Result<Request<Full<Bytes>>> {
-        let method = Method::from_bytes(method.as_bytes()).context("invalid HTTP method")?;
-        let mut builder = Request::builder().method(method).uri(path);
-        if body.is_some() {
-            builder = builder.header("content-type", "application/json");
-        }
-        builder
-            .body(Full::new(Bytes::from(body.unwrap_or_default())))
-            .context("building daemon request")
-    }
-
     #[cfg(unix)]
-    async fn send_request(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<String>,
-    ) -> Result<(StatusCode, String)> {
-        let stream = UnixStream::connect(&self.endpoint)
-            .await
-            .with_context(|| format!("connecting to daemon socket {}", self.endpoint))?;
-        let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
+    pub fn new(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
 
-        let response = sender
-            .send_request(Self::http_request(method, path, body)?)
-            .await?;
-        let status = response.status();
-        let bytes = response.into_body().collect().await?.to_bytes();
-        Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
+    /// On Windows, `new()` creates a TCP-based client for test compatibility.
+    /// The socket_path is read to get the TCP address written by the mock daemon.
+    #[cfg(windows)]
+    pub fn new(socket_path: PathBuf) -> Self {
+        // The mock daemon on Windows writes the TCP address to the socket_path file.
+        let tcp_addr = std::fs::read_to_string(&socket_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        Self {
+            pipe_name: r"\\.\pipe\homerun-daemon".to_string(),
+            tcp_addr,
+        }
     }
 
     #[cfg(windows)]
+    pub fn new_pipe(pipe_name: String) -> Self {
+        Self {
+            pipe_name,
+            tcp_addr: None,
+        }
+    }
+
+    pub fn default_socket() -> Self {
+        #[cfg(unix)]
+        {
+            let home = dirs::home_dir().expect("no home directory");
+            Self::new(home.join(".homerun/daemon.sock"))
+        }
+        #[cfg(windows)]
+        {
+            Self::new_pipe(r"\\.\pipe\homerun-daemon".to_string())
+        }
+    }
+
+    pub fn clone_connection(&self) -> Self {
+        #[cfg(unix)]
+        {
+            Self::new(self.socket_path.clone())
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                pipe_name: self.pipe_name.clone(),
+                tcp_addr: self.tcp_addr,
+            }
+        }
+    }
+
+    /// Check if the daemon socket/pipe exists.
+    pub fn socket_exists(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.socket_path.exists()
+        }
+        #[cfg(windows)]
+        {
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(&self.pipe_name)
+                .is_ok()
+        }
+    }
+
+    /// Return the socket path (for WebSocket connections).
+    #[cfg(unix)]
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
+    }
+
+    /// Send an HTTP request to the daemon and return (status_code, body_text).
     async fn send_request(
         &self,
         method: &str,
         path: &str,
         body: Option<String>,
-    ) -> Result<(StatusCode, String)> {
-        let pipe_name = ipc::windows_pipe_name(&self.endpoint);
-        let stream = loop {
-            match ClientOptions::new().open(&pipe_name) {
-                Ok(stream) => break stream,
-                Err(error) if error.raw_os_error() == Some(231) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-                Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("connecting to daemon pipe {pipe_name}"));
-                }
-            }
-        };
-        let (mut sender, connection) =
-            hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let response = sender
-            .send_request(Self::http_request(method, path, body)?)
-            .await?;
-        let status = response.status();
-        let bytes = response.into_body().collect().await?.to_bytes();
-        Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
-    }
+    ) -> Result<(u16, String)> {
+        let uri = format!("http://localhost{path}");
+        let mut builder = Request::builder().method(method).uri(&uri);
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let req = builder.body(body.unwrap_or_default())?;
 
-    #[cfg(not(any(unix, windows)))]
-    async fn send_request(
-        &self,
-        _method: &str,
-        _path: &str,
-        _body: Option<String>,
-    ) -> Result<(StatusCode, String)> {
-        bail!("unsupported platform")
+        #[cfg(unix)]
+        let response = {
+            let connector = UnixConnector {
+                socket_path: self.socket_path.clone(),
+            };
+            let client: Client<UnixConnector, String> =
+                Client::builder(TokioExecutor::new()).build(connector);
+            client
+                .request(req)
+                .await
+                .context("Failed to connect to daemon — is homerund running?")?
+        };
+        #[cfg(windows)]
+        let response = if let Some(addr) = self.tcp_addr {
+            // Test mode: connect via TCP to mock daemon
+            let tcp_uri: hyper::Uri = format!("http://{addr}{path}").parse()?;
+            let tcp_req = Request::builder()
+                .method(method)
+                .uri(tcp_uri)
+                .header("content-type", "application/json")
+                .body(req.into_body())?;
+            let connector = hyper_util::client::legacy::connect::HttpConnector::new();
+            let client: Client<_, String> = Client::builder(TokioExecutor::new()).build(connector);
+            client
+                .request(tcp_req)
+                .await
+                .context("Failed to connect to daemon — is homerund running?")?
+        } else {
+            let connector = NamedPipeConnector {
+                pipe_name: self.pipe_name.clone(),
+            };
+            let client: Client<NamedPipeConnector, String> =
+                Client::builder(TokioExecutor::new()).build(connector);
+            client
+                .request(req)
+                .await
+                .context("Failed to connect to daemon — is homerund running?")?
+        };
+
+        let status = response.status().as_u16();
+        let collected = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .context("Failed to read response body")?;
+        let bytes = collected.to_bytes();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        Ok((status, text))
     }
 
     async fn request(&self, method: &str, path: &str, body: Option<String>) -> Result<String> {
         let (status_code, text) = self.send_request(method, path, body).await?;
-        if status_code.is_success() {
-            Ok(text)
-        } else {
-            bail!("daemon returned {status_code}: {text}")
+        let status = hyper::StatusCode::from_u16(status_code)
+            .unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR);
+
+        if !status.is_success() && status_code != 204 {
+            bail!("Daemon returned {status}: {text}");
         }
+        Ok(text)
     }
 
     async fn raw_request(
@@ -358,9 +507,11 @@ impl DaemonClient {
         method: &str,
         path: &str,
         body: Option<String>,
-    ) -> Result<(StatusCode, String)> {
+    ) -> Result<(u16, String)> {
         self.send_request(method, path, body).await
     }
+
+    // --- API methods ---
 
     pub async fn health(&self) -> Result<()> {
         self.request("GET", "/health", None).await?;
@@ -386,7 +537,7 @@ impl DaemonClient {
     }
 
     pub async fn logout(&self) -> Result<()> {
-        self.request("DELETE", "/auth", None).await?;
+        self.request("POST", "/auth/logout", None).await?;
         Ok(())
     }
 
@@ -400,19 +551,20 @@ impl DaemonClient {
         device_code: &str,
         interval: u64,
     ) -> Result<Option<AuthStatus>> {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-            let payload = serde_json::json!({ "device_code": device_code }).to_string();
-            let (status, body) = self
-                .raw_request("POST", "/auth/device/poll", Some(payload.to_string()))
-                .await?;
-            if status == StatusCode::ACCEPTED {
-                continue;
-            }
-            if status.is_success() {
-                return Ok(Some(serde_json::from_str(&body)?));
-            }
-            bail!("device flow failed ({status}): {body}")
+        let payload = serde_json::json!({
+            "device_code": device_code,
+            "interval": interval,
+        });
+        let (status, text) = self
+            .raw_request("POST", "/auth/device/poll", Some(payload.to_string()))
+            .await?;
+        if status == 401 {
+            Ok(None)
+        } else if (200..300).contains(&status) {
+            let auth: AuthStatus = serde_json::from_str(&text)?;
+            Ok(Some(auth))
+        } else {
+            bail!("Device flow poll failed ({status}): {text}")
         }
     }
 
@@ -437,8 +589,8 @@ impl DaemonClient {
         &self,
         id: &str,
         labels: Option<Vec<String>>,
-        mode: Option<RunnerMode>,
-        display_name: Option<String>,
+        mode: Option<String>,
+        display_name: Option<Option<String>>,
     ) -> Result<RunnerInfo> {
         let mut body = serde_json::Map::new();
         if let Some(labels) = labels {
@@ -448,7 +600,10 @@ impl DaemonClient {
             body.insert("mode".to_string(), serde_json::json!(mode));
         }
         if let Some(display_name) = display_name {
-            body.insert("display_name".to_string(), serde_json::json!(display_name));
+            body.insert(
+                "display_name".to_string(),
+                display_name.map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
         }
         let response = self
             .request(
@@ -484,7 +639,7 @@ impl DaemonClient {
         Ok(())
     }
 
-    pub async fn recent_runner_logs(&self, id: &str) -> Result<Vec<LogEntry>> {
+    pub async fn get_runner_logs(&self, id: &str) -> Result<Vec<LogEntry>> {
         let body = self
             .request("GET", &format!("/runners/{id}/logs/recent"), None)
             .await?;
@@ -502,7 +657,9 @@ impl DaemonClient {
     }
 
     pub async fn scan_local(&self, path: &str) -> Result<Vec<DiscoveredRepo>> {
-        let req = serde_json::json!({ "workspace_path": path });
+        let req = LocalScanRequest {
+            path: path.to_string(),
+        };
         let body = self
             .request("POST", "/scan/local", Some(serde_json::to_string(&req)?))
             .await?;
@@ -517,11 +674,10 @@ impl DaemonClient {
     pub async fn create_batch(
         &self,
         repo_full_name: &str,
-        count: u32,
+        count: u8,
         name_prefix: Option<String>,
         labels: Option<Vec<String>>,
-        mode: Option<RunnerMode>,
-        container: Option<ContainerConfig>,
+        mode: Option<String>,
     ) -> Result<BatchCreateResponse> {
         let body = serde_json::json!({
             "repo_full_name": repo_full_name,
@@ -529,53 +685,59 @@ impl DaemonClient {
             "name_prefix": name_prefix,
             "labels": labels,
             "mode": mode,
-            "container": container,
         });
-        let response = self
+        let text = self
             .request("POST", "/runners/batch", Some(body.to_string()))
             .await?;
-        Ok(serde_json::from_str(&response)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
     pub async fn start_group(&self, group_id: &str) -> Result<GroupActionResponse> {
-        let body = self
+        let text = self
             .request("POST", &format!("/runners/groups/{group_id}/start"), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
     pub async fn stop_group(&self, group_id: &str) -> Result<GroupActionResponse> {
-        let body = self
+        let text = self
             .request("POST", &format!("/runners/groups/{group_id}/stop"), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
     pub async fn restart_group(&self, group_id: &str) -> Result<GroupActionResponse> {
-        let body = self
+        let text = self
             .request("POST", &format!("/runners/groups/{group_id}/restart"), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
     pub async fn delete_group(&self, group_id: &str) -> Result<GroupActionResponse> {
-        let body = self
+        let text = self
             .request("DELETE", &format!("/runners/groups/{group_id}"), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
-    pub async fn scale_group(&self, group_id: &str, count: u32) -> Result<ScaleGroupResponse> {
-        let body = serde_json::json!({ "count": count }).to_string();
-        let response = self
-            .request("PATCH", &format!("/runners/groups/{group_id}"), Some(body))
+    pub async fn scale_group(&self, group_id: &str, count: u8) -> Result<ScaleGroupResponse> {
+        let body = serde_json::json!({ "count": count });
+        let text = self
+            .request(
+                "PATCH",
+                &format!("/runners/groups/{group_id}"),
+                Some(body.to_string()),
+            )
             .await?;
-        Ok(serde_json::from_str(&response)?)
+        Ok(serde_json::from_str(&text)?)
     }
 
-    pub async fn service_status(&self) -> Result<ServiceStatusResponse> {
+    pub async fn service_status(&self) -> Result<bool> {
         let body = self.request("GET", "/service/status", None).await?;
-        Ok(serde_json::from_str(&body)?)
+        let value: serde_json::Value = serde_json::from_str(&body)?;
+        value["installed"]
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!("missing installed field"))
     }
 
     pub async fn install_service(&self) -> Result<()> {
@@ -588,25 +750,127 @@ impl DaemonClient {
         Ok(())
     }
 
-    pub async fn daemon_logs(&self, level: Option<&str>) -> Result<Vec<DaemonLogEntry>> {
-        let query = level.map(|l| format!("?level={l}")).unwrap_or_default();
+    pub async fn get_daemon_logs_recent(
+        &self,
+        level: Option<&str>,
+        limit: Option<usize>,
+        search: Option<&str>,
+    ) -> Result<Vec<DaemonLogEntry>> {
+        let mut params = Vec::new();
+        if let Some(l) = level {
+            params.push(format!("level={}", l));
+        }
+        if let Some(n) = limit {
+            params.push(format!("limit={}", n));
+        }
+        if let Some(s) = search {
+            params.push(format!("search={}", url_encode(s)));
+        }
+        let query = if params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", params.join("&"))
+        };
         let body = self
-            .request("GET", &format!("/daemon/logs/recent{query}"), None)
+            .request("GET", &format!("/daemon/logs/recent{}", query), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        let entries: Vec<DaemonLogEntry> = serde_json::from_str(&body)?;
+        Ok(entries)
     }
 
-    pub async fn runner_steps(&self, runner_id: &str) -> Result<StepsResponse> {
+    pub async fn get_runner_steps(&self, runner_id: &str) -> Result<StepsResponse> {
         let body = self
             .request("GET", &format!("/runners/{runner_id}/steps"), None)
             .await?;
-        Ok(serde_json::from_str(&body)?)
+        serde_json::from_str(&body).context("Failed to parse steps response")
     }
 
-    pub async fn runner_history(&self, runner_id: &str) -> Result<Vec<JobHistoryEntry>> {
+    pub async fn get_job_history(&self, runner_id: &str) -> Result<Vec<JobHistoryEntry>> {
         let body = self
             .request("GET", &format!("/runners/{runner_id}/history"), None)
             .await?;
         Ok(serde_json::from_str(&body)?)
+    }
+
+    /// Connect to the daemon's WebSocket endpoint for real-time events.
+    /// Returns a stream of incoming WebSocket messages.
+    #[cfg(unix)]
+    pub async fn connect_events(
+        &self,
+    ) -> Result<SplitStream<WebSocketStream<tokio::net::UnixStream>>> {
+        let stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
+        let uri = "ws://localhost/events";
+        let (ws_stream, _response) = tokio_tungstenite::client_async(uri, stream).await?;
+        let (_write, read) = ws_stream.split();
+        Ok(read)
+    }
+
+    /// Connect to the daemon's WebSocket endpoint for real-time events.
+    /// Returns a stream of incoming WebSocket messages.
+    #[cfg(windows)]
+    pub async fn connect_events(
+        &self,
+    ) -> Result<SplitStream<WebSocketStream<tokio::net::windows::named_pipe::NamedPipeClient>>>
+    {
+        let client = tokio::net::windows::named_pipe::ClientOptions::new().open(&self.pipe_name)?;
+        let uri = "ws://localhost/events";
+        let (ws_stream, _response) = tokio_tungstenite::client_async(uri, client).await?;
+        let (_write, read) = ws_stream.split();
+        Ok(read)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_parse_runners_response() {
+        let json = r#"[
+            {
+                "config": {
+                    "id": "abc-123",
+                    "name": "gifted-runner-1",
+                    "repo_owner": "aGallea",
+                    "repo_name": "gifted",
+                    "labels": ["self-hosted", "macOS"],
+                    "mode": "app",
+                    "work_dir": "/tmp/runners/abc-123"
+                },
+                "state": "online",
+                "pid": null,
+                "uptime_secs": null,
+                "jobs_completed": 0,
+                "jobs_failed": 0
+            }
+        ]"#;
+        let runners: Vec<RunnerInfo> = serde_json::from_str(json).unwrap();
+        assert_eq!(runners.len(), 1);
+        assert_eq!(runners[0].config.name, "gifted-runner-1");
+        assert_eq!(runners[0].state, "online");
+    }
+
+    #[tokio::test]
+    async fn test_parse_auth_status() {
+        let json = r#"{"authenticated": false, "user": null}"#;
+        let status: AuthStatus = serde_json::from_str(json).unwrap();
+        assert!(!status.authenticated);
+        assert!(status.user.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_parse_metrics_response() {
+        let json = r#"{
+            "system": {
+                "cpu_percent": 12.5,
+                "memory_used_bytes": 8000000000,
+                "memory_total_bytes": 16000000000,
+                "disk_used_bytes": 100000000000,
+                "disk_total_bytes": 500000000000
+            },
+            "runners": []
+        }"#;
+        let metrics: MetricsResponse = serde_json::from_str(json).unwrap();
+        assert!((metrics.system.cpu_percent - 12.5).abs() < f64::EPSILON);
     }
 }
