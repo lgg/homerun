@@ -21,22 +21,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Apply staged product audit patch
+      - name: Reconstruct and apply staged patch
         shell: bash
         run: |
           set -euo pipefail
           if [[ ! -f .audit/full-product-patch.00 ]]; then
             echo 'No staged patch remains; branch is already updated.'
+            touch /tmp/no-staged-patch
             exit 0
           fi
           cat .audit/full-product-patch.* | base64 --decode | gzip --decompress > /tmp/full-product-audit.patch
+          wc -c /tmp/full-product-audit.patch
+          sha256sum /tmp/full-product-audit.patch
           git apply --check /tmp/full-product-audit.patch
           git apply /tmp/full-product-audit.patch
           rm -rf .audit
+      - name: Update Rust lockfiles
+        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+        run: |
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Format and verify patch
+        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+        run: |
           cargo fmt --all
           git diff --check
+      - name: Commit applied product audit fixes
+        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
