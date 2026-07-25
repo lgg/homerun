@@ -96,14 +96,14 @@ async fn test_cmd_status_authenticated() {
         .build()
         .await;
     let client = DaemonClient::new(mock.socket_path().clone());
-    cli::cmd_status(&client).await.unwrap();
+    cli::cmd_status(&client, false).await.unwrap();
 }
 
 #[tokio::test]
 async fn test_cmd_status_unauthenticated() {
     let mock = MockDaemon::builder().build().await;
     let client = DaemonClient::new(mock.socket_path().clone());
-    cli::cmd_status(&client).await.unwrap();
+    cli::cmd_status(&client, false).await.unwrap();
 }
 
 #[tokio::test]
