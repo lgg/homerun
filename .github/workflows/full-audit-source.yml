@@ -32,8 +32,6 @@ jobs:
             exit 0
           fi
           cat .audit/full-product-patch.* | base64 --decode | gzip --decompress > /tmp/full-product-audit.patch
-          wc -c /tmp/full-product-audit.patch
-          sha256sum /tmp/full-product-audit.patch
           git apply --check /tmp/full-product-audit.patch
           git apply /tmp/full-product-audit.patch
           rm -rf .audit
@@ -43,30 +41,15 @@ jobs:
         run: |
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
-      - name: Capture Rust formatting diagnostics
-        if: steps.patch.outputs.applied == 'true'
-        shell: bash
-        run: |
-          set +e
-          cargo fmt --all > /tmp/rustfmt.log 2>&1
-          echo "$?" > /tmp/rustfmt.status
-          exit 0
-      - uses: actions/upload-artifact@v4
-        if: steps.patch.outputs.applied == 'true'
-        with:
-          name: full-audit-rustfmt-diagnostics
-          path: |
-            /tmp/rustfmt.log
-            /tmp/rustfmt.status
-          retention-days: 1
-      - name: Verify formatting and patch
+      - name: Format and verify patch
         if: steps.patch.outputs.applied == 'true'
         run: |
-          status=$(cat /tmp/rustfmt.status)
-          if [[ "$status" != '0' ]]; then
-            cat /tmp/rustfmt.log
-            exit "$status"
-          fi
+          cargo fmt --all
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('apps/desktop/src-tauri/Cargo.toml')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PY
           git diff --check
       - name: Commit applied product audit fixes
         if: steps.patch.outputs.applied == 'true'
