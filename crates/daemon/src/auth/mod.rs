@@ -80,18 +80,18 @@ impl AuthManager {
         }
     }
 
-    /// Attempt to restore a previously saved token from the keychain on startup.
+    /// Attempt to restore a previously saved token from the credential store on startup.
     pub async fn try_restore(&self) -> Result<()> {
         if let Some(token) = keychain::get_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)? {
             match self.validate_token(&token).await {
                 Ok(user) => {
-                    tracing::info!("Restored GitHub authentication from keychain");
+                    tracing::info!("Restored GitHub authentication from the credential store");
                     let mut state = self.state.write().await;
                     *state = Some(AuthState { token, user });
                 }
                 Err(e) => {
                     // Don't delete the token — it might be a transient network error.
-                    // Just log it and leave the token in keychain for next restart.
+                    // Just log it and leave the token in the credential store for next restart.
                     tracing::warn!("Could not validate stored token (keeping it): {e}");
                     // Still load the token into memory so API calls can try it
                     let mut state = self.state.write().await;
@@ -108,7 +108,7 @@ impl AuthManager {
         Ok(())
     }
 
-    /// Validate the PAT via the GitHub API, store it in the keychain, and update state.
+    /// Validate the PAT via the GitHub API, store it in the credential store, and update state.
     pub async fn login_with_pat(&self, token: &str) -> Result<GitHubUser> {
         let user = self.validate_token(token).await?;
         keychain::store_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, token)?;
@@ -120,19 +120,19 @@ impl AuthManager {
         Ok(user)
     }
 
-    /// Remove the token from keychain and clear in-memory state.
+    /// Remove the token from the credential store and clear in-memory state.
     pub async fn logout(&self) -> Result<()> {
-        // Clear in-memory state first, then try keychain cleanup
+        // Clear in-memory state first, then try credential-store cleanup
         let mut state = self.state.write().await;
         *state = None;
         drop(state);
-        // Best-effort keychain cleanup — don't fail if token wasn't in keychain
+        // Best-effort credential-store cleanup — don't fail if token wasn't in keychain
         let _ = keychain::delete_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
         Ok(())
     }
 
     pub async fn status(&self) -> AuthStatus {
-        // Try to ensure token is loaded (triggers lazy keychain restore if needed)
+        // Try to ensure token is loaded (triggers lazy credential-store restore if needed)
         let has_token = self.token().await.is_some();
         let state = self.state.read().await;
         match &*state {
@@ -156,14 +156,14 @@ impl AuthManager {
             }
         }
 
-        // Slow path: try to restore from keychain (local-only, no network call).
+        // Slow path: try to restore from the credential store (local-only, no network call).
         // Skip in tests to avoid picking up real keychain tokens.
         // The #[cfg(test)] guard only works for unit tests within this crate;
         // integration tests (separate binaries) use the env var instead.
         #[cfg(not(test))]
         if std::env::var("HOMERUN_SKIP_KEYCHAIN").is_err() {
             if let Ok(Some(token)) = keychain::get_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
-                tracing::info!("Lazily restored auth token from keychain");
+                tracing::info!("Lazily restored auth token from the credential store");
                 let mut state = self.state.write().await;
                 // Only set if still None (another task may have restored it)
                 if state.is_none() {
@@ -205,7 +205,7 @@ impl AuthManager {
     }
 
     /// Poll GitHub until the device is authorized or until timeout.
-    /// On success, stores the token in the keychain and returns the GitHubUser.
+    /// On success, stores the token in the credential store and returns the GitHubUser.
     pub async fn poll_device_flow(&self, device_code: &str, interval: u64) -> Result<GitHubUser> {
         let client = reqwest::Client::new();
         let deadline =
@@ -235,9 +235,9 @@ impl AuthManager {
             if let Some(token) = poll.access_token {
                 let user = self.validate_token(&token).await?;
                 if let Err(e) = keychain::store_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, &token) {
-                    tracing::error!("Failed to store token in keychain: {e}");
+                    tracing::error!("Failed to store token in the credential store: {e}");
                 } else {
-                    tracing::info!("Token stored in macOS Keychain");
+                    tracing::info!("Token stored in the HomeRun credential store");
                 }
                 let mut state = self.state.write().await;
                 *state = Some(AuthState {

@@ -64,9 +64,9 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("launchd") || msg.contains("Uninstall the service") {
-                // Uninstall the launchd service, then retry shutdown
+                // Uninstall the platform startup service, then retry shutdown
                 let retry_client = client.clone_connection();
-                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall launchd service: {e}"))?;
+                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall daemon startup service: {e}"))?;
                 // Retry shutdown after uninstalling service
                 match retry_client.shutdown().await {
                     Ok(count) => count,
