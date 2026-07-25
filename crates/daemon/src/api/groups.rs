@@ -24,7 +24,7 @@ pub async fn create_batch(
 
     crate::runner::RunnerManager::validate_create_request(
         &req.repo_full_name,
-        None,
+        req.name_prefix.as_deref(),
         req.mode.as_ref(),
         req.container.as_ref(),
     )
@@ -44,6 +44,7 @@ pub async fn create_batch(
         .create_batch(
             &req.repo_full_name,
             req.count,
+            req.name_prefix,
             req.labels,
             req.mode,
             req.container,

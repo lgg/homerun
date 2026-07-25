@@ -685,13 +685,13 @@ function StepConfigure({
           <p className="form-hint">
             Defaults to HomeRun's base image. Any image with glibc and bash works — see{" "}
             <a
-              href="https://github.com/aGallea/homerun/blob/master/docs/DOCKER_RUNNERS.md"
+              href="https://github.com/lgg/homerun/blob/master/docs/DOCKER_RUNNERS.md"
               target="_blank"
               rel="noreferrer"
               onClick={(e) => {
                 e.preventDefault();
                 void openExternal(
-                  "https://github.com/aGallea/homerun/blob/master/docs/DOCKER_RUNNERS.md",
+                  "https://github.com/lgg/homerun/blob/master/docs/DOCKER_RUNNERS.md",
                 );
               }}
             >

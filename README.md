@@ -6,7 +6,7 @@
 <h1 align="center">HomeRun</h1>
 
 <p align="center">
-  <strong>One-click GitHub Actions self-hosted runners for macOS & Windows</strong>
+  <strong>One-click GitHub Actions self-hosted runners for macOS, Windows & Linux</strong>
 </p>
 
 <p align="center">
@@ -22,14 +22,14 @@
 </p>
 
 <div align="center">
-  <a href="https://github.com/aGallea/homerun/actions/workflows/ci.yml">
-    <img src="https://github.com/aGallea/homerun/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" />
+  <a href="https://github.com/lgg/homerun/actions/workflows/ci.yml">
+    <img src="https://github.com/lgg/homerun/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" />
   </a>
   <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/aGallea/77f18f115b500bdc5d6df52f95d399b9/raw/coverage.json" alt="Coverage" />
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
   </a>
-  <a href="https://github.com/aGallea/homerun/releases/latest">
+  <a href="https://github.com/lgg/homerun/releases/latest">
     <img src="https://img.shields.io/github/v/release/aGallea/homerun" alt="Latest Release" />
   </a>
   <a href="https://www.rust-lang.org/">
@@ -43,7 +43,7 @@
 
 HomeRun replaces the manual GitHub self-hosted runner setup process with a unified desktop app and terminal UI. Authenticate with GitHub once, pick a repository, and launch runners with a single click. HomeRun handles download, registration, process management, log streaming, and resource monitoring — everything the official docs make you do by hand.
 
-HomeRun runs on **macOS** and **Windows**, with Linux support planned.
+HomeRun runs on **macOS**, **Windows**, and **Linux**. Login startup is built in on macOS and Windows; Linux service integration is still manual.
 
 ## Features
 
@@ -53,13 +53,13 @@ HomeRun runs on **macOS** and **Windows**, with Linux support planned.
 - **Unified dashboard** — monitor all runners across all repos in one place
 - **Live log streaming** — tail runner output in real time from the runner detail view
 - **Job tracking** — current job progress with step-by-step status, estimated completion, and full job history per runner
-- **Real-time metrics** — CPU/RAM per runner via live WebSocket updates
+- **Runner metrics** — CPU/RAM polling with WebSocket lifecycle events for immediate dashboard refresh
 - **Two run modes** — app-managed (daemon child) or background service (launchd)
 - **Auto-restart** — crashed runners recover automatically (up to 3 attempts)
 - **Smart repo discovery** — scan local workspace directories or your GitHub account for repos that use self-hosted runners
 - **Terminal UI** — k9s-inspired TUI with info header, context-sensitive keybindings (F1-F4 tabs), repo search, and in-app login via Device Flow
 - **CLI mode** — scriptable `homerun --no-tui` commands with colored output for automation
-- **Cross-platform** — macOS (launchd auto-start, native notifications) and Windows (Task Scheduler auto-start, named pipe IPC)
+- **Cross-platform** — macOS (launchd), Windows (Registry Run + named-pipe IPC), and Linux; desktop notifications use the Tauri notification API
 - **Pre-commit hooks** — enforces `cargo fmt`, `cargo clippy`, conventional commits, and Prettier on every commit
 
 ## Architecture
@@ -91,7 +91,7 @@ New to self-hosted runners? See [How Self-Hosted Runners Work](docs/SELF_HOSTED_
 
 ### Install (macOS — DMG)
 
-1. Download the latest `.dmg` for your architecture from [Releases](https://github.com/aGallea/homerun/releases):
+1. Download the latest `.dmg` for your architecture from [Releases](https://github.com/lgg/homerun/releases):
    - **Apple Silicon** (M1/M2/M3/M4): `HomeRun_<version>_aarch64.dmg`
    - **Intel**: `HomeRun_<version>_x86_64.dmg`
 2. Open the `.dmg` and drag HomeRun to Applications
@@ -120,16 +120,20 @@ xattr -cr /Applications/HomeRun.app
 
 ### Install (Windows — MSI)
 
-1. Download `HomeRun_<version>_x64-setup.msi` from [Releases](https://github.com/aGallea/homerun/releases)
+1. Download `HomeRun_<version>_x64-setup.msi` from [Releases](https://github.com/lgg/homerun/releases)
 2. Run the installer — it installs HomeRun and the `homerund` daemon
-3. Launch HomeRun from the Start Menu — go to Settings > Startup > "Launch at login" to auto-start the daemon via Task Scheduler
+3. Launch HomeRun from the Start Menu — go to Settings > Startup > "Launch at login" to auto-start the daemon through the current user Registry Run entry
+
+### Install (Linux — AppImage / deb)
+
+Download the latest `.AppImage` or `.deb` from [Releases](https://github.com/lgg/homerun/releases). The daemon and TUI are also published as an `x86_64-unknown-linux-gnu` tarball. Linux login startup is not installed automatically yet; launch `homerund` yourself or configure your preferred user service manager.
 
 ### Build from Source
 
 **Prerequisites:** Rust 1.75+ ([rustup.rs](https://rustup.rs)), Node.js 20+. On macOS: Xcode Command Line Tools (`xcode-select --install`). On Windows: Visual Studio Build Tools with C++ workload.
 
 ```sh
-git clone https://github.com/aGallea/homerun.git
+git clone https://github.com/lgg/homerun.git
 cd homerun
 ```
 
@@ -253,10 +257,24 @@ homerun --no-tui scan --remote
 # Combine local and remote scanning
 homerun --no-tui scan ~/workspace --remote
 
-# Manage the daemon
+# Authenticate and manage runners
+homerun --no-tui login
+homerun --no-tui add build-1 --repo owner/repo
+homerun --no-tui add build --repo owner/repo --count 3
+homerun --no-tui start build-1
+homerun --no-tui stop build-1
+homerun --no-tui restart build-1
+homerun --no-tui set-mode build-1 app
+homerun --no-tui remove build-1
+homerun --no-tui logout
+
+# Manage the daemon and login startup
 homerun --no-tui daemon start
 homerun --no-tui daemon stop
 homerun --no-tui daemon restart
+homerun --no-tui daemon autostart status
+homerun --no-tui daemon autostart enable
+homerun --no-tui daemon autostart disable
 ```
 
 ## Tech Stack
@@ -271,20 +289,20 @@ homerun --no-tui daemon restart
 | Auth token storage | File-based (`~/.homerun/auth.json`)                                          |
 | Log streaming      | Server-Sent Events (SSE)                                                     |
 | Real-time updates  | WebSocket                                                                    |
-| Auto-start         | macOS launchd / Windows Task Scheduler                                       |
-| Notifications      | macOS native (`mac-notification-sys`)                                        |
+| Auto-start         | macOS launchd / Windows Registry Run; Linux manual                          |
+| Notifications      | Tauri notification plugin (macOS / Windows / Linux)                         |
 
 ## Roadmap
 
-| Feature                    | Description                                                                            | Issue                                                 |
-| -------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Live log streaming         | Capture runner step logs locally for fully real-time job progress                      | [#44](https://github.com/aGallea/homerun/issues/44)   |
-| Docker runners             | Run runners inside containers — isolated environments, resource limits, ephemeral mode | [#84](https://github.com/aGallea/homerun/issues/84)   |
-| Kubernetes backend         | Manage runners as pods in a K8s cluster                                                | [#89](https://github.com/aGallea/homerun/issues/89)   |
-| Cross-platform (Linux)     | Extend to Linux (systemd auto-start, packaging)                                        | [#112](https://github.com/aGallea/homerun/issues/112) |
-| Organization-level runners | Manage runners at the GitHub org level, not just per-repo                              | —                                                     |
+| Feature                    | Description                                                               |
+| -------------------------- | ------------------------------------------------------------------------- |
+| Step-level live logs       | Capture every workflow step locally with lower-latency progress updates   |
+| Docker execution controls  | Resource limits and ephemeral container cleanup policies                  |
+| Kubernetes backend         | Manage runners as pods in a Kubernetes cluster                            |
+| Linux service integration  | Built-in systemd user-service installation and login startup              |
+| Organization-level runners | Manage runners at the GitHub organization level, not only per repository  |
 
-Priorities depend on user interest — if a feature would be useful to you, drop a thumbs-up on the issue.
+Priorities depend on user interest and verified platform demand.
 
 ## Requirements
 
@@ -298,7 +316,12 @@ Priorities depend on user interest — if a feature would be useful to you, drop
 - Windows 10 or later
 - x64
 
-**Both platforms:**
+**Linux:**
+
+- A modern x86_64 distribution with WebKitGTK 4.1 for the desktop app
+- Manual daemon startup or a user-managed service
+
+**All platforms:**
 
 - A GitHub account
 
@@ -321,11 +344,7 @@ homerund
 <details>
 <summary><strong>Authentication fails / "token expired"</strong></summary>
 
-Re-authenticate by running the Device Flow login again from the TUI or desktop app. If you're using a PAT, ensure it has the `repo` and `admin:org` scopes. You can also clear the stored token from macOS Keychain:
-
-```sh
-security delete-generic-password -s "homerun" -a "github_token"
-```
+Re-authenticate with Device Flow from the TUI or desktop app, or run `homerun --no-tui login`. For a PAT, grant only the repository and runner-administration permissions you need. HomeRun stores the token in `~/.homerun/auth.json` with owner-only permissions on Unix; `homerun --no-tui logout` removes it.
 
 </details>
 
@@ -362,7 +381,7 @@ The daemon must be running before launching the desktop app or TUI. Start it wit
 homerund
 ```
 
-Or enable "Launch at login" in Settings > Startup to have it start automatically (via launchd on macOS, Task Scheduler on Windows).
+Or enable "Launch at login" in Settings > Startup to have it start automatically via launchd on macOS or the current-user Registry Run entry on Windows. Linux startup is currently configured manually.
 
 </details>
 
@@ -373,7 +392,7 @@ macOS Ventura+ shows a "Background Items Added" notification when HomeRun regist
 
 You can manage background items in **System Settings > General > Login Items & Extensions**.
 
-Code signing is tracked in [#49](https://github.com/aGallea/homerun/issues/49) — once resolved, the notification will show "HomeRun" properly.
+Code signing is tracked in [#49](https://github.com/lgg/homerun/issues/49) — once resolved, the notification will show "HomeRun" properly.
 
 </details>
 

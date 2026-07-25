@@ -57,9 +57,9 @@ mod macos {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{home}/logs/daemon.log</string>
+    <string>{home}/.homerun/logs/daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>{home}/logs/daemon.err</string>
+    <string>{home}/.homerun/logs/daemon.err</string>
 </dict>
 </plist>"#,
             daemon_path.display(),
@@ -71,6 +71,11 @@ mod macos {
     /// loads it with `launchctl load`.
     pub fn install_daemon_service(daemon_path: &Path) -> Result<()> {
         let plist_path = plist_path()?;
+        let log_dir = dirs::home_dir()
+            .context("Could not determine home directory")?
+            .join(".homerun/logs");
+        std::fs::create_dir_all(&log_dir)
+            .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
 
         // Ensure parent directory exists
         if let Some(parent) = plist_path.parent() {

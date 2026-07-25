@@ -3,8 +3,8 @@ use tauri::State;
 use crate::client::{
     AuthStatus, BatchCreateResponse, CreateBatchRequest, CreateRunnerRequest, DaemonLogEntry,
     DeviceFlowResponse, DiscoveredRepo, DockerStatusResponse, GroupActionResponse,
-    JobHistoryEntry, LogEntry, MetricsResponse, Preferences, RepoInfo, RunnerInfo, ScanResults,
-    ScaleGroupResponse, StepLogsResponse, StepsResponse,
+    JobHistoryEntry, LogEntry, MetricsResponse, Preferences, RepoInfo, RunStatusResponse, RunnerInfo,
+    ScanResults, ScaleGroupResponse, StepLogsResponse, StepsResponse,
 };
 use crate::AppState;
 
@@ -64,9 +64,9 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("launchd") || msg.contains("Uninstall the service") {
-                // Uninstall the launchd service, then retry shutdown
+                // Uninstall the platform startup service, then retry shutdown
                 let retry_client = client.clone_connection();
-                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall launchd service: {e}"))?;
+                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall daemon startup service: {e}"))?;
                 // Retry shutdown after uninstalling service
                 match retry_client.shutdown().await {
                     Ok(count) => count,
@@ -405,6 +405,16 @@ pub async fn rerun_workflow(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn get_run_status(
+    state: State<'_, AppState>,
+    runner_id: String,
+    run_url: String,
+) -> Result<RunStatusResponse, String> {
+    let client = state.client.lock().await.clone_connection();
+    client.get_run_status(&runner_id, &run_url).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn clear_runner_history(
     state: State<'_, AppState>,
     runner_id: String,
@@ -488,41 +498,71 @@ pub async fn start_scan(
     app_handle: tauri::AppHandle,
     workspace_path: Option<String>,
     authenticated: bool,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     use tauri::Emitter;
+    use uuid::Uuid;
 
     let base_client = state.client.lock().await.clone_connection();
+    let mut scan_ids = Vec::new();
 
-    if let Some(path) = workspace_path {
+    if let Some(path) = workspace_path.filter(|path| !path.trim().is_empty()) {
+        let scan_id = Uuid::new_v4().to_string();
+        scan_ids.push(scan_id.clone());
         let app = app_handle.clone();
+        let error_app = app_handle.clone();
         let scan_client = base_client.clone_connection();
         tokio::spawn(async move {
-            let body = serde_json::json!({ "path": path }).to_string();
-            if let Ok(text) = scan_client.request("POST", "/scan/local/stream", Some(body)).await {
-                for line in text.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        let _ = app.emit("scan-progress", data);
-                    }
-                }
+            let body = serde_json::json!({ "path": path, "scan_id": scan_id }).to_string();
+            let event_scan_id = scan_id.clone();
+            let result = scan_client
+                .stream_sse("POST", "/scan/local/stream", Some(body), move |data| {
+                    let _ = app.emit("scan-progress", data);
+                })
+                .await;
+            if let Err(error) = result {
+                let payload = serde_json::json!({
+                    "type": "failed",
+                    "scan_id": event_scan_id,
+                    "scan_type": "local",
+                    "message": error,
+                })
+                .to_string();
+                let _ = error_app.emit("scan-progress", payload);
             }
         });
     }
 
     if authenticated {
+        let scan_id = Uuid::new_v4().to_string();
+        scan_ids.push(scan_id.clone());
         let app = app_handle.clone();
+        let error_app = app_handle.clone();
         let scan_client = base_client.clone_connection();
         tokio::spawn(async move {
-            if let Ok(text) = scan_client.request("POST", "/scan/remote/stream", None).await {
-                for line in text.lines() {
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        let _ = app.emit("scan-progress", data);
-                    }
-                }
+            let body = serde_json::json!({ "scan_id": scan_id }).to_string();
+            let event_scan_id = scan_id.clone();
+            let result = scan_client
+                .stream_sse("POST", "/scan/remote/stream", Some(body), move |data| {
+                    let _ = app.emit("scan-progress", data);
+                })
+                .await;
+            if let Err(error) = result {
+                let payload = serde_json::json!({
+                    "type": "failed",
+                    "scan_id": event_scan_id,
+                    "scan_type": "remote",
+                    "message": error,
+                })
+                .to_string();
+                let _ = error_app.emit("scan-progress", payload);
             }
         });
     }
 
-    Ok(())
+    if scan_ids.is_empty() {
+        return Err("Configure a workspace path or authenticate before scanning".to_string());
+    }
+    Ok(scan_ids)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -543,20 +583,23 @@ pub async fn get_scan_results(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn send_notification(title: String, body: String, icon_path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        mac_notification_sys::Notification::new()
-            .title(&title)
-            .message(&body)
-            .app_icon(&icon_path)
-            .send()
-            .map(|_| ())
-            .map_err(|e| format!("Failed to send notification: {e}"))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (&title, &body, &icon_path);
-        Ok(())
-    }
+pub fn send_notification(
+    app_handle: tauri::AppHandle,
+    title: String,
+    body: String,
+    icon_path: String,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    // The notification plugin provides the native backend on macOS and Windows.
+    // The icon path is retained in the command contract for backwards compatibility;
+    // platform notification centers use the packaged application icon.
+    let _ = icon_path;
+    app_handle
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| format!("Failed to send notification: {e}"))
 }

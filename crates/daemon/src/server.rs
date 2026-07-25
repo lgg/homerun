@@ -212,7 +212,7 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
 
     // Restore auth token from credential store
     if let Err(e) = state.auth.try_restore().await {
-        tracing::warn!("Failed to restore auth from keychain: {}", e);
+        tracing::warn!("Failed to restore auth from the credential store: {}", e);
     }
 
     // Sync auth token to runner manager so it can query GitHub API for job context

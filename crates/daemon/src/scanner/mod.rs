@@ -35,33 +35,61 @@ pub enum DiscoverySource {
     Both,
 }
 
-/// Scan progress event emitted during scanning.
+/// Scan progress event emitted during scanning. Every event carries the
+/// operation ID assigned by the caller so concurrent or stale streams cannot
+/// corrupt each other in clients.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ScanProgressEvent {
     Started {
+        scan_id: String,
         scan_type: String,
         total: usize,
     },
     Checking {
+        scan_id: String,
+        scan_type: String,
         repo: String,
         index: usize,
         total: usize,
     },
     Found {
+        scan_id: String,
+        scan_type: String,
         #[serde(flatten)]
         repo: DiscoveredRepo,
     },
+    Warning {
+        scan_id: String,
+        scan_type: String,
+        repo: Option<String>,
+        message: String,
+    },
     Done {
+        scan_id: String,
         scan_type: String,
         total_found: usize,
         total_checked: usize,
     },
     Cancelled {
+        scan_id: String,
         scan_type: String,
         checked: usize,
         total: usize,
     },
+    Failed {
+        scan_id: String,
+        scan_type: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanOutcome {
+    pub results: Vec<DiscoveredRepo>,
+    pub checked: usize,
+    pub total: usize,
+    pub cancelled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -337,33 +365,39 @@ async fn check_workflows_dir(
 pub async fn scan_local_with_progress<F>(
     workspace_dir: &Path,
     labels: &[String],
+    scan_id: &str,
     cancel: CancellationToken,
     on_progress: F,
-) -> Result<Vec<DiscoveredRepo>>
+) -> Result<ScanOutcome>
 where
     F: Fn(ScanProgressEvent) + Send,
 {
     let repos = discover_local_repos(workspace_dir).await?;
     let total = repos.len();
+    let scan_type = "local".to_string();
 
     on_progress(ScanProgressEvent::Started {
-        scan_type: "local".to_string(),
+        scan_id: scan_id.to_string(),
+        scan_type: scan_type.clone(),
         total,
     });
 
     let mut results = Vec::new();
+    let mut checked = 0;
 
     for (index, (full_name, repo_root, workflows_dir)) in repos.into_iter().enumerate() {
         if cancel.is_cancelled() {
-            on_progress(ScanProgressEvent::Cancelled {
-                scan_type: "local".to_string(),
-                checked: index,
+            return Ok(ScanOutcome {
+                results,
+                checked,
                 total,
+                cancelled: true,
             });
-            return Ok(results);
         }
 
         on_progress(ScanProgressEvent::Checking {
+            scan_id: scan_id.to_string(),
+            scan_type: scan_type.clone(),
             repo: full_name.clone(),
             index: index + 1,
             total,
@@ -371,6 +405,7 @@ where
 
         let (workflow_files, matched_labels) =
             check_workflows_dir(&workflows_dir, &repo_root, labels).await;
+        checked = index + 1;
 
         if !workflow_files.is_empty() {
             let repo = DiscoveredRepo {
@@ -380,19 +415,22 @@ where
                 matched_labels,
                 local_path: Some(repo_root),
             };
-            on_progress(ScanProgressEvent::Found { repo: repo.clone() });
+            on_progress(ScanProgressEvent::Found {
+                scan_id: scan_id.to_string(),
+                scan_type: scan_type.clone(),
+                repo: repo.clone(),
+            });
             results.push(repo);
         }
     }
 
-    on_progress(ScanProgressEvent::Done {
-        scan_type: "local".to_string(),
-        total_found: results.len(),
-        total_checked: total,
-    });
-
     results.sort_by(|a, b| a.full_name.cmp(&b.full_name));
-    Ok(results)
+    Ok(ScanOutcome {
+        results,
+        checked,
+        total,
+        cancelled: false,
+    })
 }
 
 /// Run `git config --get remote.origin.url` in `repo_root` and extract
@@ -476,66 +514,82 @@ pub async fn scan_remote(
 pub async fn scan_remote_with_progress<F>(
     github_client: &GitHubClient,
     labels: &[String],
+    scan_id: &str,
     cancel: CancellationToken,
     on_progress: F,
-) -> Result<Vec<DiscoveredRepo>>
+) -> Result<ScanOutcome>
 where
     F: Fn(ScanProgressEvent) + Send,
 {
     let repos = github_client.list_repos().await?;
     let total = repos.len();
+    let scan_type = "remote".to_string();
 
     on_progress(ScanProgressEvent::Started {
-        scan_type: "remote".to_string(),
+        scan_id: scan_id.to_string(),
+        scan_type: scan_type.clone(),
         total,
     });
 
     let mut results = Vec::new();
+    let mut checked = 0;
 
     for (index, repo) in repos.into_iter().enumerate() {
         if cancel.is_cancelled() {
-            on_progress(ScanProgressEvent::Cancelled {
-                scan_type: "remote".to_string(),
-                checked: index,
+            return Ok(ScanOutcome {
+                results,
+                checked,
                 total,
+                cancelled: true,
             });
-            return Ok(results);
         }
 
         on_progress(ScanProgressEvent::Checking {
+            scan_id: scan_id.to_string(),
+            scan_type: scan_type.clone(),
             repo: repo.full_name.clone(),
             index: index + 1,
             total,
         });
 
-        let (workflow_files, matched_labels) = github_client
+        match github_client
             .list_workflows_with_labels(&repo.owner, &repo.name, labels)
             .await
-            .unwrap_or_default();
-
-        if !workflow_files.is_empty() {
-            let discovered = DiscoveredRepo {
-                full_name: repo.full_name.clone(),
-                source: DiscoverySource::Remote,
-                workflow_files,
-                matched_labels,
-                local_path: None,
-            };
-            on_progress(ScanProgressEvent::Found {
-                repo: discovered.clone(),
-            });
-            results.push(discovered);
+        {
+            Ok((workflow_files, matched_labels)) => {
+                if !workflow_files.is_empty() {
+                    let discovered = DiscoveredRepo {
+                        full_name: repo.full_name.clone(),
+                        source: DiscoverySource::Remote,
+                        workflow_files,
+                        matched_labels,
+                        local_path: None,
+                    };
+                    on_progress(ScanProgressEvent::Found {
+                        scan_id: scan_id.to_string(),
+                        scan_type: scan_type.clone(),
+                        repo: discovered.clone(),
+                    });
+                    results.push(discovered);
+                }
+            }
+            Err(error) => on_progress(ScanProgressEvent::Warning {
+                scan_id: scan_id.to_string(),
+                scan_type: scan_type.clone(),
+                repo: Some(repo.full_name.clone()),
+                message: error.to_string(),
+            }),
         }
+        checked = index + 1;
     }
 
-    on_progress(ScanProgressEvent::Done {
-        scan_type: "remote".to_string(),
-        total_found: results.len(),
-        total_checked: total,
-    });
-
     results.sort_by(|a, b| a.full_name.cmp(&b.full_name));
-    Ok(results)
+    Ok(ScanOutcome {
+        results,
+        checked,
+        total,
+        cancelled: false,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -901,25 +955,28 @@ mod tests {
         let labels = vec!["self-hosted".to_string()];
         let cancel = CancellationToken::new();
 
-        let results = scan_local_with_progress(tmp.path(), &labels, cancel, move |event| {
-            let tag = match &event {
-                ScanProgressEvent::Started { .. } => "started",
-                ScanProgressEvent::Checking { .. } => "checking",
-                ScanProgressEvent::Found { .. } => "found",
-                ScanProgressEvent::Done { .. } => "done",
-                ScanProgressEvent::Cancelled { .. } => "cancelled",
-            };
-            events_clone.lock().unwrap().push(tag.to_string());
-        })
-        .await
-        .unwrap();
+        let results =
+            scan_local_with_progress(tmp.path(), &labels, "test-local", cancel, move |event| {
+                let tag = match &event {
+                    ScanProgressEvent::Started { .. } => "started",
+                    ScanProgressEvent::Checking { .. } => "checking",
+                    ScanProgressEvent::Found { .. } => "found",
+                    ScanProgressEvent::Done { .. } => "done",
+                    ScanProgressEvent::Cancelled { .. } => "cancelled",
+                    ScanProgressEvent::Warning { .. } => "warning",
+                    ScanProgressEvent::Failed { .. } => "failed",
+                };
+                events_clone.lock().unwrap().push(tag.to_string());
+            })
+            .await
+            .unwrap();
 
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.results.len(), 1);
         let ev = events.lock().unwrap();
         assert_eq!(ev[0], "started");
         assert_eq!(ev[1], "checking");
         assert_eq!(ev[2], "found");
-        assert_eq!(ev[3], "done");
+        assert_eq!(ev.len(), 3);
     }
 
     #[tokio::test]
@@ -937,9 +994,11 @@ mod tests {
         cancel.cancel();
 
         let labels = vec!["self-hosted".to_string()];
-        let results = scan_local_with_progress(tmp.path(), &labels, cancel, |_| {})
+        let results = scan_local_with_progress(tmp.path(), &labels, "test-cancel", cancel, |_| {})
             .await
             .unwrap();
-        assert!(results.is_empty());
+        assert!(results.results.is_empty());
+        assert!(results.cancelled);
+        assert_eq!(results.checked, 0);
     }
 }

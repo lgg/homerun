@@ -1,4 +1,6 @@
+use futures::{stream::SplitStream, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio_tungstenite::WebSocketStream;
 #[cfg(unix)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -19,7 +21,8 @@ fn url_encode(s: &str) -> String {
     encoded
 }
 
-use hyper::Request;
+use hyper::{body::Incoming, Request, Response};
+use http_body_util::BodyExt;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 
@@ -224,6 +227,8 @@ pub struct CreateRunnerRequest {
 pub struct CreateBatchRequest {
     pub repo_full_name: String,
     pub count: u8,
+    #[serde(default)]
+    pub name_prefix: Option<String>,
     pub labels: Option<Vec<String>>,
     pub mode: Option<String>,
     #[serde(default)]
@@ -235,6 +240,12 @@ pub struct DockerStatusResponse {
     pub available: bool,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunStatusResponse {
+    pub status: String,
+    pub conclusion: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -459,12 +470,12 @@ impl DaemonClient {
         }
     }
 
-    pub async fn request(
+    async fn send_request(
         &self,
         method: &str,
         path: &str,
         body: Option<String>,
-    ) -> Result<String, String> {
+    ) -> Result<Response<Incoming>, String> {
         // hyper requires a valid URI — the host is ignored for Unix sockets / named pipes.
         let uri = format!("http://localhost{path}");
         let mut builder = Request::builder().method(method).uri(&uri);
@@ -499,18 +510,86 @@ impl DaemonClient {
                 .await
                 .map_err(|e| format!("Failed to connect to daemon — is homerund running? {e}"))?
         };
+        Ok(response)
+    }
 
+    pub async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+    ) -> Result<String, String> {
+        let response = self.send_request(method, path, body).await?;
         let status = response.status();
-        let collected = http_body_util::BodyExt::collect(response.into_body())
+        let collected = response
+            .into_body()
+            .collect()
             .await
             .map_err(|e| format!("Failed to read response body: {e}"))?;
-        let bytes = collected.to_bytes();
-        let text = String::from_utf8_lossy(&bytes).to_string();
+        let text = String::from_utf8_lossy(&collected.to_bytes()).to_string();
 
         if !status.is_success() && status.as_u16() != 204 {
             return Err(format!("Daemon returned {status}: {text}"));
         }
         Ok(text)
+    }
+
+    /// Consume an SSE response incrementally and invoke `on_data` for every
+    /// complete data payload. This deliberately does not buffer the response,
+    /// allowing scan progress and cancellation to remain live.
+    pub async fn stream_sse<F>(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<String>,
+        mut on_data: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(String) + Send,
+    {
+        let response = self.send_request(method, path, body).await?;
+        let status = response.status();
+        if !status.is_success() {
+            let collected = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| format!("Failed to read scan error response: {e}"))?;
+            let text = String::from_utf8_lossy(&collected.to_bytes()).to_string();
+            return Err(format!("Daemon returned {status}: {text}"));
+        }
+
+        let mut body = response.into_body();
+        let mut buffer = String::new();
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|e| format!("Failed to read scan stream: {e}"))?;
+            let Ok(data) = frame.into_data() else {
+                continue;
+            };
+            buffer.push_str(&String::from_utf8_lossy(&data));
+
+            loop {
+                let boundary = buffer
+                    .find("\n\n")
+                    .map(|index| (index, 2))
+                    .or_else(|| buffer.find("\r\n\r\n").map(|index| (index, 4)));
+                let Some((index, delimiter_len)) = boundary else {
+                    break;
+                };
+                let event = buffer[..index].to_string();
+                buffer.drain(..index + delimiter_len);
+                let data = event
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data:"))
+                    .map(str::trim_start)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !data.is_empty() {
+                    on_data(data);
+                }
+            }
+        }
+        Ok(())
     }
 
     // --- API methods ---
@@ -527,7 +606,7 @@ impl DaemonClient {
 
     pub async fn login_with_token(&self, token: &str) -> Result<AuthStatus, String> {
         let payload = serde_json::json!({ "token": token }).to_string();
-        let body = self.request("POST", "/auth/login", Some(payload)).await?;
+        let body = self.request("POST", "/auth/token", Some(payload)).await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
 
@@ -663,6 +742,22 @@ impl DaemonClient {
         Ok(())
     }
 
+    pub async fn get_run_status(
+        &self,
+        runner_id: &str,
+        run_url: &str,
+    ) -> Result<RunStatusResponse, String> {
+        let payload = serde_json::json!({ "run_url": run_url }).to_string();
+        let body = self
+            .request(
+                "POST",
+                &format!("/runners/{runner_id}/run-status"),
+                Some(payload),
+            )
+            .await?;
+        serde_json::from_str(&body).map_err(|e| e.to_string())
+    }
+
     pub async fn clear_runner_history(&self, runner_id: &str) -> Result<(), String> {
         self.request("DELETE", &format!("/runners/{runner_id}/history"), None).await?;
         Ok(())
@@ -780,4 +875,38 @@ impl DaemonClient {
             .await?;
         serde_json::from_str(&body).map_err(|e| e.to_string())
     }
+
+    /// Connect to the daemon WebSocket for immediate runner lifecycle updates.
+    #[cfg(unix)]
+    pub async fn connect_events(
+        &self,
+    ) -> Result<SplitStream<WebSocketStream<tokio::net::UnixStream>>, String> {
+        let stream = tokio::net::UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(|e| format!("Failed to connect to daemon event stream: {e}"))?;
+        let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost/events", stream)
+            .await
+            .map_err(|e| format!("Failed to open daemon event stream: {e}"))?;
+        let (_, read) = ws_stream.split();
+        Ok(read)
+    }
+
+    /// Connect to the daemon WebSocket for immediate runner lifecycle updates.
+    #[cfg(windows)]
+    pub async fn connect_events(
+        &self,
+    ) -> Result<
+        SplitStream<WebSocketStream<tokio::net::windows::named_pipe::NamedPipeClient>>,
+        String,
+    > {
+        let stream = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&self.pipe_name)
+            .map_err(|e| format!("Failed to connect to daemon event stream: {e}"))?;
+        let (ws_stream, _) = tokio_tungstenite::client_async("ws://localhost/events", stream)
+            .await
+            .map_err(|e| format!("Failed to open daemon event stream: {e}"))?;
+        let (_, read) = ws_stream.split();
+        Ok(read)
+    }
+
 }

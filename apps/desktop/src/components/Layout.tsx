@@ -61,11 +61,27 @@ export function Layout() {
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<string>("navigate", (event) => {
-      navigate(event.payload);
-    });
+    let disposed = false;
+    let removeListener: (() => void) | undefined;
+
+    try {
+      void listen<string>("navigate", (event) => {
+        if (!disposed) navigate(event.payload);
+      })
+        .then((unlisten) => {
+          if (disposed) unlisten();
+          else removeListener = unlisten;
+        })
+        .catch(() => {
+          // Browser previews and unit tests do not provide a Tauri event bridge.
+        });
+    } catch {
+      // Treat a synchronously unavailable bridge like an unavailable stream.
+    }
+
     return () => {
-      unlisten.then((fn) => fn());
+      disposed = true;
+      removeListener?.();
     };
   }, [navigate]);
 

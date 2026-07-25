@@ -44,11 +44,12 @@ export function TrayPanel() {
     resizeToFit();
   }, [runners, resizeToFit]);
 
-  const counts = { online: 0, busy: 0, offline: 0 };
-  for (const r of runners) {
-    if (r.state === "busy") counts.busy++;
-    else if (r.state === "offline" || r.state === "error") counts.offline++;
-    else counts.online++;
+  const counts = { online: 0, busy: 0, offline: 0, transitioning: 0 };
+  for (const runner of runners) {
+    if (runner.state === "busy") counts.busy++;
+    else if (runner.state === "online") counts.online++;
+    else if (runner.state === "offline" || runner.state === "error") counts.offline++;
+    else counts.transitioning++;
   }
 
   const sorted = [...runners].sort((a, b) => {
@@ -82,6 +83,12 @@ export function TrayPanel() {
           <strong className="tray-muted">{counts.offline}</strong>{" "}
           <span className="tray-muted">offline</span>
         </span>
+        {counts.transitioning > 0 && (
+          <span>
+            <strong style={{ color: "var(--accent-blue)" }}>{counts.transitioning}</strong>{" "}
+            <span className="tray-muted">starting/stopping</span>
+          </span>
+        )}
       </div>
 
       <div className="tray-runners">

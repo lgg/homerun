@@ -8,6 +8,7 @@ import type {
   ScaleGroupResponse,
 } from "../api/types";
 import { api } from "../api/commands";
+import { useEvents } from "./useEvents";
 
 export function useRunners() {
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
@@ -45,6 +46,10 @@ export function useRunners() {
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  // WebSocket lifecycle events provide immediate updates; polling remains as a
+  // resilient fallback for metrics and daemon restarts.
+  useEvents(refresh);
 
   const createRunner = useCallback(
     async (req: CreateRunnerRequest) => {

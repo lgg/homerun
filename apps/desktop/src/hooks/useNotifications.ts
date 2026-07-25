@@ -43,7 +43,7 @@ export function useNotifications(runners: RunnerInfo[], preferences: Preferences
   const initialized = useRef(false);
 
   useEffect(() => {
-    if (!preferences || runners.length === 0) return;
+    if (!preferences) return;
 
     const prev = prevRef.current;
 

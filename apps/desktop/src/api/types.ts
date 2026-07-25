@@ -207,6 +207,7 @@ export interface RunnerEvent {
 export interface CreateBatchRequest {
   repo_full_name: string;
   count: number;
+  name_prefix?: string;
   labels?: string[];
   mode?: string;
   container?: ContainerConfig;
@@ -257,16 +258,18 @@ export interface DiscoveredRepo {
 }
 
 export interface ScanProgressEvent {
-  type: "started" | "checking" | "found" | "done" | "cancelled";
-  scan_type?: string;
+  type: "started" | "checking" | "found" | "warning" | "done" | "cancelled" | "failed";
+  scan_id: string;
+  scan_type: "local" | "remote";
   repo?: string;
   index?: number;
   total?: number;
   total_found?: number;
   total_checked?: number;
   checked?: number;
+  message?: string;
   full_name?: string;
-  source?: string;
+  source?: "local" | "remote" | "both";
   workflow_files?: string[];
   matched_labels?: string[];
   local_path?: string | null;

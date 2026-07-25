@@ -1330,6 +1330,7 @@ impl RunnerManager {
         &self,
         repo_full_name: &str,
         count: u8,
+        name_prefix: Option<String>,
         labels: Option<Vec<String>>,
         mode: Option<RunnerMode>,
         container: Option<types::ContainerConfig>,
@@ -1342,7 +1343,9 @@ impl RunnerManager {
             match self
                 .create_desired_running(
                     repo_full_name,
-                    None,
+                    name_prefix
+                        .as_ref()
+                        .map(|prefix| format!("{prefix}-{}", i + 1)),
                     labels.clone(),
                     mode.clone(),
                     Some(group_id.clone()),
