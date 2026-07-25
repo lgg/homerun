@@ -22,12 +22,13 @@ jobs:
         with:
           components: rustfmt
       - name: Reconstruct and apply staged patch
+        id: patch
         shell: bash
         run: |
           set -euo pipefail
           if [[ ! -f .audit/full-product-patch.00 ]]; then
             echo 'No staged patch remains; branch is already updated.'
-            touch /tmp/no-staged-patch
+            echo 'applied=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           cat .audit/full-product-patch.* | base64 --decode | gzip --decompress > /tmp/full-product-audit.patch
@@ -36,18 +37,39 @@ jobs:
           git apply --check /tmp/full-product-audit.patch
           git apply /tmp/full-product-audit.patch
           rm -rf .audit
+          echo 'applied=true' >> "$GITHUB_OUTPUT"
       - name: Update Rust lockfiles
-        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+        if: steps.patch.outputs.applied == 'true'
         run: |
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
-      - name: Format and verify patch
-        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+      - name: Capture Rust formatting diagnostics
+        if: steps.patch.outputs.applied == 'true'
+        shell: bash
         run: |
-          cargo fmt --all
+          set +e
+          cargo fmt --all > /tmp/rustfmt.log 2>&1
+          echo "$?" > /tmp/rustfmt.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: steps.patch.outputs.applied == 'true'
+        with:
+          name: full-audit-rustfmt-diagnostics
+          path: |
+            /tmp/rustfmt.log
+            /tmp/rustfmt.status
+          retention-days: 1
+      - name: Verify formatting and patch
+        if: steps.patch.outputs.applied == 'true'
+        run: |
+          status=$(cat /tmp/rustfmt.status)
+          if [[ "$status" != '0' ]]; then
+            cat /tmp/rustfmt.log
+            exit "$status"
+          fi
           git diff --check
       - name: Commit applied product audit fixes
-        if: ${{ hashFiles('/tmp/no-staged-patch') == '' }}
+        if: steps.patch.outputs.applied == 'true'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
