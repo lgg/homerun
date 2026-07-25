@@ -26,30 +26,33 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('crates/tui/src/main.rs')
           text = path.read_text()
+          changed = False
+
           old_ws = 'start_ws_forwarding(event_tx, ws_read);'
           new_ws = 'start_ws_forwarding(event_tx.clone(), ws_read);'
-          old_logs = '''        Action::LoadRunnerLogs(id) => {
-              app.runner_logs = client.get_runner_logs(id).await?;
-              app.show_runner_logs = true;
-              Ok(())
-          }'''
-          new_logs = '''        Action::LoadRunnerLogs(id) => client.get_runner_logs(id).await.map(|logs| {
-              app.runner_logs = logs;
-              app.show_runner_logs = true;
-          }),'''
-
-          changed = False
           if old_ws in text:
               text = text.replace(old_ws, new_ws, 1)
               changed = True
           elif new_ws not in text:
               raise SystemExit('WebSocket sender pattern not found')
 
-          if old_logs in text:
-              text = text.replace(old_logs, new_logs, 1)
+          new_logs = '''        Action::LoadRunnerLogs(id) => client.get_runner_logs(id).await.map(|logs| {
+              app.runner_logs = logs;
+              app.show_runner_logs = true;
+          }),'''
+          pattern = re.compile(
+              r'        Action::LoadRunnerLogs\(id\) => \{\n'
+              r'\s*app\.runner_logs = client\.get_runner_logs\(id\)\.await\?;\n'
+              r'\s*app\.show_runner_logs = true;\n'
+              r'\s*Ok\(\(\)\)\n'
+              r'\s*\}',
+          )
+          text, count = pattern.subn(new_logs, text, count=1)
+          if count == 1:
               changed = True
           elif new_logs not in text:
               raise SystemExit('LoadRunnerLogs pattern not found')
@@ -71,7 +74,7 @@ jobs:
             exit 0
           fi
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898241+github-actions[bot]@users.noreply.github.com'
           git add crates/tui/src/main.rs
           git commit -m 'fix: resolve final TUI compile regressions'
           git push origin HEAD:audit/full-product-function-screen-audit-2026-07-25
