@@ -128,7 +128,7 @@ jobs:
       - name: Build homerun CLI
         run: cargo build --release -p homerun
 
-      - name: Package CLI binaries
+      - name: Packae CII binaries
         run: |
           New-Item -ItemType Directory -Force -Path cli-dist
           Copy-Item target/release/homerun.exe cli-dist/
@@ -183,7 +183,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev \
+            librsvg2t-dev \
             patchelf \
             libssl-dev \
             build-essential \
@@ -279,7 +279,7 @@ jobs:
   update-tap:
     name: Update Homebrew Tap
     needs: release
-    if: ${{ github.ref_type == 'tag' && github.repository == 'aGallea/homerun' }}
+    if: ${{ github.ref_type == 'tag' && vars.HOMEBREW_TAP_REPOSITORY != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -291,6 +291,7 @@ jobs:
       - name: Compute SHA256 hashes and dispatch
         env:
           GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           SHA_CLI_ARM=$(sha256sum artifacts/homerun-v${VERSION}-aarch64-apple-darwin.tar.gz | awk '{print $1}')
@@ -298,7 +299,7 @@ jobs:
           SHA_DMG_ARM=$(sha256sum artifacts/HomeRun_${VERSION}_aarch64.dmg | awk '{print $1}')
           SHA_DMG_X86=$(sha256sum artifacts/HomeRun_${VERSION}_x64.dmg | awk '{print $1}')
 
-          gh api repos/aGallea/homebrew-homerun/dispatches \
+          gh api "repos/${HOMEBREW_TAP_REPOSITORY}/dispatches" \
             --method POST \
             -f event_type=update-tap \
             -f "client_payload[version]=${VERSION}" \
