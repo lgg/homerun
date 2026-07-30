@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router";
 import { useRepos } from "../hooks/useRepos";
 import { useScan } from "../hooks/useScan";
 import type { RunnersContextType } from "../hooks/useRunners";

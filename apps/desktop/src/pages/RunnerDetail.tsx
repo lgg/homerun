@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate, Link, useOutletContext } from "react-router-dom";
+import { useParams, useNavigate, Link, useOutletContext } from "react-router";
 import type { RunnersContextType } from "../hooks/useRunners";
 import { useMetrics } from "../hooks/useMetrics";
 import { useAuth } from "../hooks/useAuth";
