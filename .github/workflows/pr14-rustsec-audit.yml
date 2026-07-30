@@ -1,4 +1,4 @@
-name: PR14 RustSec Audit
+name: PR14 RustSec Dependency Chains
 
 on:
   pull_request:
@@ -9,32 +9,28 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  inspect:
     if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           ref: audit/post-merge-runtime-consistency-2026-07-31
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Capture workspace audit
+      - name: Capture dependency chains
         shell: bash
         run: |
-          set +e
-          cargo audit --json > /tmp/cargo-audit-workspace.json
-          echo "$?" > /tmp/cargo-audit-workspace.status
-          (cd apps/desktop/src-tauri && cargo audit --json > /tmp/cargo-audit-tauri.json)
-          echo "$?" > /tmp/cargo-audit-tauri.status
-          exit 0
+          cargo tree -i lru@0.12.5 > /tmp/lru-chain.txt
+          cargo tree -i paste@1.0.15 > /tmp/paste-chain.txt
+          cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -i glib@0.18.5 > /tmp/glib-chain.txt
+          cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -i atk@0.18.2 > /tmp/atk-chain.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: pr14-rustsec-audit
+          name: pr14-rustsec-chains
           path: |
-            /tmp/cargo-audit-workspace.json
-            /tmp/cargo-audit-workspace.status
-            /tmp/cargo-audit-tauri.json
-            /tmp/cargo-audit-tauri.status
+            /tmp/lru-chain.txt
+            /tmp/paste-chain.txt
+            /tmp/glib-chain.txt
+            /tmp/atk-chain.txt
           retention-days: 1
