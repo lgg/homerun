@@ -39,7 +39,9 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
 
       - name: Apply final review fixes
-        run: python scripts/pr14_review_patch.py
+        run: |
+          python scripts/pr14_review_patch.py
+          python scripts/pr14_review_test_patch.py
 
       - name: Format and verify patch
         run: |
