@@ -42,6 +42,9 @@ jobs:
         run: |
           python scripts/pr14_backend_patch.py
           python scripts/pr14_frontend_patch.py
+          # Workflow files require a separate GitHub App permission. Keep the
+          # runtime consistency commit limited to production code/docs/tests.
+          git checkout -- .github/workflows/release-build.yml
 
       - name: Format changed files
         run: |
@@ -49,7 +52,6 @@ jobs:
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
           npx --yes prettier@3.9.5 --write \
             README.md \
-            .github/workflows/release-build.yml \
             apps/desktop/src/hooks/AuthContext.tsx \
             apps/desktop/src/hooks/useRunners.ts \
             apps/desktop/src/hooks/useRepos.ts \
@@ -92,7 +94,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
             README.md \
-            .github/workflows/release-build.yml \
             crates/daemon/src \
             apps/desktop/src-tauri/src/commands.rs \
             apps/desktop/src
