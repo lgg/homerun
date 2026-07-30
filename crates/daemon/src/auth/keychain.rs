@@ -1,3 +1,4 @@
+use crate::persistence::atomic_write;
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -22,23 +23,12 @@ pub fn delete_token(_service: &str, _account: &str) -> Result<()> {
 }
 
 fn store_token_at(path: &std::path::Path, token: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, token)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    Ok(())
+    atomic_write(path, token.as_bytes(), Some(0o600))
 }
 
 fn get_token_at(path: &std::path::Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
-        Ok(token) if !token.is_empty() => Ok(Some(token)),
+        Ok(token) if !token.trim().is_empty() => Ok(Some(token.trim().to_string())),
         Ok(_) => Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),

@@ -5,6 +5,7 @@ pub mod github;
 pub mod logging;
 pub mod metrics;
 pub mod notifications;
+pub mod persistence;
 pub mod platform;
 pub mod runner;
 pub mod scanner;

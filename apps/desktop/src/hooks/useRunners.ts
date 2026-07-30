@@ -16,6 +16,7 @@ export function useRunners() {
   const [error, setError] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const initialFetch = useRef(true);
+  const refreshGeneration = useRef(0);
 
   const addPending = (id: string) => setPendingActions((prev) => new Set(prev).add(id));
   const removePending = (id: string) =>
@@ -26,15 +27,16 @@ export function useRunners() {
     });
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     try {
       const data = await api.listRunners();
+      if (generation !== refreshGeneration.current) return;
       setRunners(data);
       setError(null);
     } catch (e) {
-      setError(String(e));
-      setRunners([]);
+      if (generation === refreshGeneration.current) setError(String(e));
     } finally {
-      if (initialFetch.current) {
+      if (generation === refreshGeneration.current && initialFetch.current) {
         initialFetch.current = false;
         setLoading(false);
       }

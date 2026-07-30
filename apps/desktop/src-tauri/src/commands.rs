@@ -2,24 +2,21 @@ use tauri::State;
 
 use crate::client::{
     AuthStatus, BatchCreateResponse, CreateBatchRequest, CreateRunnerRequest, DaemonLogEntry,
-    DeviceFlowResponse, DiscoveredRepo, DockerStatusResponse, GroupActionResponse,
-    JobHistoryEntry, LogEntry, MetricsResponse, Preferences, RepoInfo, RunStatusResponse, RunnerInfo,
-    ScanResults, ScaleGroupResponse, StepLogsResponse, StepsResponse,
+    DeviceFlowResponse, DiscoveredRepo, DockerStatusResponse, GroupActionResponse, JobHistoryEntry,
+    LogEntry, MetricsResponse, Preferences, RepoInfo, RunStatusResponse, RunnerInfo,
+    ScaleGroupResponse, ScanResults, StepLogsResponse, StepsResponse,
 };
 use crate::AppState;
 
 #[tauri::command]
 pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> {
-    use tauri_plugin_shell::ShellExt;
     use std::time::Duration;
+    use tauri_plugin_shell::ShellExt;
 
     // Check if daemon is already running
     let client = crate::client::DaemonClient::default_socket();
     if client.socket_exists() {
-        let check = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            client.health(),
-        ).await;
+        let check = tokio::time::timeout(std::time::Duration::from_secs(2), client.health()).await;
         if matches!(check, Ok(Ok(_))) {
             return Err("Daemon is already running".to_string());
         }
@@ -66,7 +63,10 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
             if msg.contains("launchd") || msg.contains("Uninstall the service") {
                 // Uninstall the platform startup service, then retry shutdown
                 let retry_client = client.clone_connection();
-                retry_client.uninstall_service().await.map_err(|e| format!("Failed to uninstall daemon startup service: {e}"))?;
+                retry_client
+                    .uninstall_service()
+                    .await
+                    .map_err(|e| format!("Failed to uninstall daemon startup service: {e}"))?;
                 // Retry shutdown after uninstalling service
                 match retry_client.shutdown().await {
                     Ok(count) => count,
@@ -77,7 +77,9 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
                         }
                         let msg2 = e2.to_string();
                         if !msg2.contains("connect") {
-                            return Err(format!("Failed to stop daemon after uninstalling service: {msg2}"));
+                            return Err(format!(
+                                "Failed to stop daemon after uninstalling service: {msg2}"
+                            ));
                         }
                         0
                     }
@@ -128,12 +130,7 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<bool, String> {
     // Use a fresh client to avoid mutex contention with other commands
     // that may be hanging when the daemon is down.
     let check_client = state.client.lock().await.clone_connection();
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        check_client.health(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(2), check_client.health()).await {
         Ok(Ok(_)) => Ok(true),
         _ => Ok(false),
     }
@@ -141,7 +138,7 @@ pub async fn health_check(state: State<'_, AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn list_runners(state: State<'_, AppState>) -> Result<Vec<RunnerInfo>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.list_runners().await
 }
 
@@ -150,7 +147,7 @@ pub async fn create_runner(
     state: State<'_, AppState>,
     req: CreateRunnerRequest,
 ) -> Result<RunnerInfo, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.create_runner(&req).await
 }
 
@@ -160,7 +157,7 @@ pub async fn update_runner_display_name(
     id: String,
     display_name: Option<String>,
 ) -> Result<RunnerInfo, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client
         .update_runner_display_name(&id, display_name.as_deref())
         .await
@@ -168,31 +165,31 @@ pub async fn update_runner_display_name(
 
 #[tauri::command]
 pub async fn delete_runner(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.delete_runner(&id).await
 }
 
 #[tauri::command]
 pub async fn start_runner(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.start_runner(&id).await
 }
 
 #[tauri::command]
 pub async fn stop_runner(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.stop_runner(&id).await
 }
 
 #[tauri::command]
 pub async fn restart_runner(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.restart_runner(&id).await
 }
 
 #[tauri::command]
 pub async fn auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.auth_status().await
 }
 
@@ -201,37 +198,37 @@ pub async fn login_with_token(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<AuthStatus, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.login_with_token(&token).await
 }
 
 #[tauri::command]
 pub async fn logout(state: State<'_, AppState>) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.logout().await
 }
 
 #[tauri::command]
 pub async fn list_repos(state: State<'_, AppState>) -> Result<Vec<RepoInfo>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.list_repos().await
 }
 
 #[tauri::command]
 pub async fn get_metrics(state: State<'_, AppState>) -> Result<MetricsResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_metrics().await
 }
 
 #[tauri::command]
 pub async fn docker_status(state: State<'_, AppState>) -> Result<DockerStatusResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.docker_status().await
 }
 
 #[tauri::command]
 pub async fn start_device_flow(state: State<'_, AppState>) -> Result<DeviceFlowResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.start_device_flow().await
 }
 
@@ -250,25 +247,25 @@ pub async fn poll_device_flow(
 /// Check whether the daemon socket file exists (fast, no network call).
 #[tauri::command]
 pub async fn daemon_available(state: State<'_, AppState>) -> Result<bool, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     Ok(client.socket_exists())
 }
 
 #[tauri::command]
 pub async fn service_status(state: State<'_, AppState>) -> Result<bool, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.service_status().await
 }
 
 #[tauri::command]
 pub async fn install_service(state: State<'_, AppState>) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.install_service().await
 }
 
 #[tauri::command]
 pub async fn uninstall_service(state: State<'_, AppState>) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.uninstall_service().await
 }
 
@@ -277,7 +274,7 @@ pub async fn get_runner_logs(
     state: State<'_, AppState>,
     runner_id: String,
 ) -> Result<Vec<LogEntry>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_runner_logs(&runner_id).await
 }
 
@@ -286,7 +283,7 @@ pub async fn create_batch(
     state: State<'_, AppState>,
     req: CreateBatchRequest,
 ) -> Result<BatchCreateResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.create_batch(&req).await
 }
 
@@ -295,7 +292,7 @@ pub async fn start_group(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<GroupActionResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.start_group(&group_id).await
 }
 
@@ -304,7 +301,7 @@ pub async fn stop_group(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<GroupActionResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.stop_group(&group_id).await
 }
 
@@ -313,7 +310,7 @@ pub async fn restart_group(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<GroupActionResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.restart_group(&group_id).await
 }
 
@@ -322,7 +319,7 @@ pub async fn delete_group(
     state: State<'_, AppState>,
     group_id: String,
 ) -> Result<GroupActionResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.delete_group(&group_id).await
 }
 
@@ -332,13 +329,13 @@ pub async fn scale_group(
     group_id: String,
     count: u8,
 ) -> Result<ScaleGroupResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.scale_group(&group_id, count).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn get_preferences(state: State<'_, AppState>) -> Result<Preferences, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_preferences().await
 }
 
@@ -347,7 +344,7 @@ pub async fn update_preferences(
     state: State<'_, AppState>,
     prefs: Preferences,
 ) -> Result<Preferences, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.update_preferences(&prefs).await
 }
 
@@ -356,13 +353,13 @@ pub async fn scan_local(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<DiscoveredRepo>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.scan_local(&path).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn scan_remote(state: State<'_, AppState>) -> Result<Vec<DiscoveredRepo>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.scan_remote().await
 }
 
@@ -371,7 +368,7 @@ pub async fn get_runner_steps(
     state: State<'_, AppState>,
     runner_id: String,
 ) -> Result<StepsResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_runner_steps(&runner_id).await
 }
 
@@ -381,7 +378,7 @@ pub async fn get_step_logs(
     runner_id: String,
     step_number: u16,
 ) -> Result<StepLogsResponse, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_step_logs(&runner_id, step_number).await
 }
 
@@ -390,7 +387,7 @@ pub async fn get_runner_history(
     state: State<'_, AppState>,
     runner_id: String,
 ) -> Result<Vec<JobHistoryEntry>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.get_runner_history(&runner_id).await
 }
 
@@ -400,7 +397,7 @@ pub async fn rerun_workflow(
     runner_id: String,
     run_url: String,
 ) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.rerun_workflow(&runner_id, &run_url).await
 }
 
@@ -419,7 +416,7 @@ pub async fn clear_runner_history(
     state: State<'_, AppState>,
     runner_id: String,
 ) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.clear_runner_history(&runner_id).await
 }
 
@@ -429,7 +426,7 @@ pub async fn delete_history_entry(
     runner_id: String,
     started_at: String,
 ) -> Result<(), String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.delete_history_entry(&runner_id, &started_at).await
 }
 
@@ -440,17 +437,14 @@ pub async fn get_daemon_logs_recent(
     limit: Option<usize>,
     search: Option<String>,
 ) -> Result<Vec<DaemonLogEntry>, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client
         .get_daemon_logs_recent(level.as_deref(), limit, search.as_deref())
         .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn update_tray_icon(
-    app_handle: tauri::AppHandle,
-    state: String,
-) -> Result<(), String> {
+pub async fn update_tray_icon(app_handle: tauri::AppHandle, state: String) -> Result<(), String> {
     crate::tray::update_icon(&app_handle, &state)
 }
 
@@ -479,9 +473,7 @@ pub async fn save_mini_position(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_mini_position(
-    app_handle: tauri::AppHandle,
-) -> Result<Option<(f64, f64)>, String> {
+pub async fn get_mini_position(app_handle: tauri::AppHandle) -> Result<Option<(f64, f64)>, String> {
     Ok(crate::window::load_mini_position(&app_handle).map(|p| (p.x, p.y)))
 }
 
@@ -570,15 +562,13 @@ pub async fn cancel_scan(
     state: State<'_, AppState>,
     scan_id: String,
 ) -> Result<serde_json::Value, String> {
-    let client = state.client.lock().await;
+    let client = state.client.lock().await.clone_connection();
     client.cancel_scan(&scan_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn get_scan_results(
-    state: State<'_, AppState>,
-) -> Result<Option<ScanResults>, String> {
-    let client = state.client.lock().await;
+pub async fn get_scan_results(state: State<'_, AppState>) -> Result<Option<ScanResults>, String> {
+    let client = state.client.lock().await.clone_connection();
     client.get_scan_results().await
 }
 

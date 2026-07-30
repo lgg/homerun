@@ -32,13 +32,13 @@ export function Repositories() {
 
   // Auto-scan on mount if enabled
   useEffect(() => {
-    if (preferences?.auto_scan && (preferences.workspace_path || auth.authenticated)) {
+    if (!scanning && preferences?.auto_scan && (preferences.workspace_path || auth.authenticated)) {
       void runScan({
         workspacePath: preferences.workspace_path,
         authenticated: auth.authenticated,
       });
     }
-  }, [preferences?.auto_scan, preferences?.workspace_path, auth.authenticated, runScan]);
+  }, [scanning, preferences?.auto_scan, preferences?.workspace_path, auth.authenticated, runScan]);
 
   // Count runners per repo full_name
   const runnerCountByRepo = useMemo(() => {
@@ -515,7 +515,9 @@ function FilterPill({
   onClick: () => void;
 }) {
   return (
-    <span
+    <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
       style={{
         fontSize: 12,
@@ -525,9 +527,10 @@ function FilterPill({
         color: active ? "var(--accent-blue)" : "var(--text-secondary)",
         cursor: "pointer",
         border: `1px solid ${active ? "rgba(31, 111, 235, 0.4)" : "var(--border)"}`,
+        fontFamily: "inherit",
       }}
     >
       {label}
-    </span>
+    </button>
   );
 }

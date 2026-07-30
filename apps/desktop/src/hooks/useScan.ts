@@ -17,6 +17,7 @@ export function useScan() {
   const activeScanIds = useRef(new Set<string>());
   const launchPending = useRef(false);
   const scanningRef = useRef(false);
+  const cancelRequested = useRef(false);
 
   const refreshResults = useCallback(async () => {
     const results = await api.getScanResults();
@@ -34,6 +35,7 @@ export function useScan() {
       setScanError((current) => current ?? String(error));
     } finally {
       scanningRef.current = false;
+      cancelRequested.current = false;
       setScanning(false);
       setProgressText(null);
     }
@@ -107,12 +109,14 @@ export function useScan() {
     async (options: ScanOptions) => {
       const { workspacePath, authenticated } = options;
 
+      if (scanningRef.current || launchPending.current) return;
       if (!workspacePath && !authenticated) {
         setScanError("Configure a workspace path or sign in to scan.");
         return;
       }
 
       activeScanIds.current.clear();
+      cancelRequested.current = false;
       launchPending.current = true;
       scanningRef.current = true;
       setScanning(true);
@@ -123,6 +127,10 @@ export function useScan() {
         const scanIds = await api.startScan(workspacePath, authenticated);
         for (const id of scanIds) activeScanIds.current.add(id);
         launchPending.current = false;
+        if (cancelRequested.current) {
+          setProgressText("Cancelling scan...");
+          await Promise.allSettled(scanIds.map((id) => api.cancelScan(id)));
+        }
         await finishIfIdle();
       } catch (error) {
         launchPending.current = false;
@@ -137,9 +145,10 @@ export function useScan() {
   );
 
   const cancelScan = useCallback(async () => {
+    cancelRequested.current = true;
     const ids = [...activeScanIds.current];
-    if (ids.length === 0) return;
     setProgressText("Cancelling scan...");
+    if (ids.length === 0) return;
     const results = await Promise.allSettled(ids.map((id) => api.cancelScan(id)));
     const failures = results.filter((result) => result.status === "rejected");
     if (failures.length > 0) {

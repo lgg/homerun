@@ -228,7 +228,7 @@ export function RunnerDetail() {
   const navigate = useNavigate();
   const { auth, handleUnauthorized } = useAuth();
   const isAuthenticated = auth.authenticated;
-  const { runners, loading, startRunner, stopRunner, restartRunner, deleteRunner } =
+  const { runners, loading, pendingActions, startRunner, stopRunner, restartRunner, deleteRunner } =
     useOutletContext<RunnersContextType>();
   const { metrics } = useMetrics();
   const runner = runners.find((r) => r.config.id === id);
@@ -312,13 +312,15 @@ export function RunnerDetail() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [followLogs, setFollowLogs] = useState(true);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const logsGeneration = useRef(0);
 
   useEffect(() => {
     if (!id) return;
     async function fetchLogs() {
+      const generation = ++logsGeneration.current;
       try {
         const entries = await api.getRunnerLogs(id!);
-        setLogs(entries);
+        if (generation === logsGeneration.current) setLogs(entries);
       } catch {
         // ignore errors (runner may be offline)
       }
@@ -365,9 +367,10 @@ export function RunnerDetail() {
     state === "creating" || state === "registering" || state === "stopping" || state === "deleting";
   const canRestart = isRunning || isStopped;
   const canDelete = !isTransient && state !== "busy";
+  const actionPending = pendingActions.has(config.id);
 
   async function doAction(fn: () => Promise<void>) {
-    if (deleting) return;
+    if (deleting || actionPending) return;
     setActionError(null);
     try {
       await fn();
@@ -445,7 +448,7 @@ export function RunnerDetail() {
             {/* Action buttons */}
             {isAuthenticated && (
               <div className="flex items-center gap-8" style={{ marginBottom: 16 }}>
-                {(isTransient || deleting) && (
+                {(isTransient || deleting || actionPending) && (
                   <span
                     style={{
                       display: "inline-block",
@@ -467,7 +470,7 @@ export function RunnerDetail() {
                   <button
                     className="btn btn-primary"
                     onClick={() => doAction(() => startRunner(config.id))}
-                    disabled={deleting}
+                    disabled={deleting || actionPending}
                   >
                     ▶ Start
                   </button>
@@ -476,7 +479,7 @@ export function RunnerDetail() {
                   <button
                     className="runner-action-btn"
                     onClick={() => doAction(() => stopRunner(config.id))}
-                    disabled={deleting}
+                    disabled={deleting || actionPending}
                   >
                     ■ Stop
                   </button>
@@ -484,14 +487,14 @@ export function RunnerDetail() {
                 <button
                   className="runner-action-btn"
                   onClick={() => doAction(() => restartRunner(config.id))}
-                  disabled={!canRestart || deleting}
+                  disabled={!canRestart || deleting || actionPending}
                 >
                   ↺ Restart
                 </button>
                 <button
                   className="runner-action-btn runner-action-btn-danger"
                   onClick={() => setConfirmDelete(true)}
-                  disabled={!canDelete || deleting}
+                  disabled={!canDelete || deleting || actionPending}
                 >
                   Delete
                 </button>

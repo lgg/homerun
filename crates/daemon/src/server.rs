@@ -66,6 +66,7 @@ impl AppState {
     pub fn new_test_authenticated() -> Self {
         let mut state = Self::new_test();
         state.auth = AuthManager::new_test_authenticated();
+        state.runner_manager.set_auth_manager(state.auth.clone());
         state
     }
 }

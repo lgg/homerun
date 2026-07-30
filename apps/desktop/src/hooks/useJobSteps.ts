@@ -18,6 +18,8 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
   const [stepLogs, setStepLogs] = useState<Record<number, string[]>>({});
   const logCacheRef = useRef<Record<number, string[]>>({});
+  const stepsGeneration = useRef(0);
+  const logsGeneration = useRef(0);
 
   // Poll steps every 1s when busy
   useEffect(() => {
@@ -33,13 +35,14 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
     setLoading(true);
 
     const fetchSteps = async () => {
+      const generation = ++stepsGeneration.current;
       try {
         const data = await api.getRunnerSteps(runnerId);
-        setStepsResponse(data);
+        if (generation === stepsGeneration.current) setStepsResponse(data);
       } catch {
         // ignore errors during polling
       } finally {
-        setLoading(false);
+        if (generation === stepsGeneration.current) setLoading(false);
       }
     };
 
@@ -60,8 +63,10 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
     if (isCached && !isRunning) return;
 
     const fetchLogs = async () => {
+      const generation = ++logsGeneration.current;
       try {
         const data = await api.getStepLogs(runnerId, expandedStep);
+        if (generation !== logsGeneration.current) return;
         const lines = data.lines;
 
         // Cache only if step is completed (not running)
