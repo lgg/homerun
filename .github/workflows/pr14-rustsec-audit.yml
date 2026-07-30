@@ -1,4 +1,4 @@
-name: PR14 RustSec Dependency Chains
+name: PR14 Ratatui Soundness Fix
 
 on:
   pull_request:
@@ -6,31 +6,66 @@ on:
     types: [synchronize]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  upgrade-and-verify:
     if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
         with:
           ref: audit/post-merge-runtime-consistency-2026-07-31
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Capture dependency chains
+        with:
+          components: rustfmt, clippy
+
+      - name: Upgrade Ratatui and Crossterm
         shell: bash
         run: |
-          cargo tree -i lru@0.12.5 > /tmp/lru-chain.txt
-          cargo tree -i paste@1.0.15 > /tmp/paste-chain.txt
-          cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -i glib@0.18.5 > /tmp/glib-chain.txt
-          cargo tree --manifest-path apps/desktop/src-tauri/Cargo.toml -i atk@0.18.2 > /tmp/atk-chain.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pr14-rustsec-chains
-          path: |
-            /tmp/lru-chain.txt
-            /tmp/paste-chain.txt
-            /tmp/glib-chain.txt
-            /tmp/atk-chain.txt
-          retention-days: 1
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/tui/Cargo.toml')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('ratatui = "0.29"', 'ratatui = "0.30.2"')
+          text = text.replace('crossterm = "0.28"', 'crossterm = "0.29"')
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo update -p ratatui --precise 0.30.2
+          cargo update -p crossterm --precise 0.29.0
+          cargo fmt --all
+          git diff --check
+
+      - name: Verify TUI and workspace
+        run: |
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          ./target/release/homerun --help
+
+      - name: Verify soundness dependency removed
+        shell: bash
+        run: |
+          if cargo tree -i lru@0.12.5 >/tmp/old-lru.txt 2>&1; then
+            cat /tmp/old-lru.txt
+            echo 'Old unsound lru version is still reachable'
+            exit 1
+          fi
+          cargo tree -i lru@0.18.0
+          if cargo tree -i paste@1.0.15 >/tmp/paste.txt 2>&1; then
+            cat /tmp/paste.txt
+            echo 'Unmaintained paste dependency is still reachable'
+            exit 1
+          fi
+
+      - name: Commit verified Rust dependency upgrade
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/tui/Cargo.toml Cargo.lock
+          git commit -m 'fix: update TUI soundness dependencies'
+          git push origin HEAD:audit/post-merge-runtime-consistency-2026-07-31
