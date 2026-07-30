@@ -316,18 +316,29 @@ export function RunnerDetail() {
 
   useEffect(() => {
     if (!id) return;
+    const generation = ++logsGeneration.current;
+    let cancelled = false;
+    let timer: number | undefined;
+
     async function fetchLogs() {
-      const generation = ++logsGeneration.current;
       try {
         const entries = await api.getRunnerLogs(id!);
-        if (generation === logsGeneration.current) setLogs(entries);
+        if (!cancelled && generation === logsGeneration.current) setLogs(entries);
       } catch {
-        // ignore errors (runner may be offline)
+        // Ignore errors while the runner is offline or transitioning.
+      } finally {
+        if (!cancelled && generation === logsGeneration.current) {
+          timer = window.setTimeout(() => void fetchLogs(), 2000);
+        }
       }
     }
-    fetchLogs();
-    const timer = setInterval(fetchLogs, 2000);
-    return () => clearInterval(timer);
+
+    void fetchLogs();
+    return () => {
+      cancelled = true;
+      logsGeneration.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [id]);
 
   useEffect(() => {

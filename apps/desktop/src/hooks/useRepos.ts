@@ -38,6 +38,7 @@ export function useRepos(enabled = true) {
 
   useEffect(() => {
     if (!enabled) {
+      refreshGeneration.current += 1;
       setRepos([]);
       setError(null);
       setLoading(false);
@@ -46,7 +47,10 @@ export function useRepos(enabled = true) {
     setLoading(true);
     void refresh();
     const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      refreshGeneration.current += 1;
+    };
   }, [enabled, refresh]);
 
   return { repos, loading, error, refresh };

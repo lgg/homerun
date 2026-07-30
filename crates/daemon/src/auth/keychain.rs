@@ -1,8 +1,10 @@
 use crate::persistence::atomic_write;
 use anyhow::Result;
+#[cfg(not(test))]
 use std::path::PathBuf;
 
 /// Returns the path to the auth token file: `~/.homerun/auth.json`
+#[cfg(not(test))]
 fn auth_file_path() -> PathBuf {
     dirs::home_dir()
         .expect("no home directory")
@@ -10,16 +12,34 @@ fn auth_file_path() -> PathBuf {
         .join("auth.json")
 }
 
+#[cfg(not(test))]
 pub fn store_token(_service: &str, _account: &str, token: &str) -> Result<()> {
     store_token_at(&auth_file_path(), token)
 }
 
+#[cfg(test)]
+pub fn store_token(_service: &str, _account: &str, _token: &str) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(test))]
 pub fn get_token(_service: &str, _account: &str) -> Result<Option<String>> {
     get_token_at(&auth_file_path())
 }
 
+#[cfg(test)]
+pub fn get_token(_service: &str, _account: &str) -> Result<Option<String>> {
+    Ok(None)
+}
+
+#[cfg(not(test))]
 pub fn delete_token(_service: &str, _account: &str) -> Result<()> {
     delete_token_at(&auth_file_path())
+}
+
+#[cfg(test)]
+pub fn delete_token(_service: &str, _account: &str) -> Result<()> {
+    Ok(())
 }
 
 fn store_token_at(path: &std::path::Path, token: &str) -> Result<()> {
@@ -56,6 +76,9 @@ mod tests {
         store_token_at(&path, token).unwrap();
         let retrieved = get_token_at(&path).unwrap();
         assert_eq!(retrieved, Some(token.to_string()));
+
+        std::fs::write(&path, format!("  {token}\n")).unwrap();
+        assert_eq!(get_token_at(&path).unwrap(), Some(token.to_string()));
 
         delete_token_at(&path).unwrap();
         let deleted = get_token_at(&path).unwrap();

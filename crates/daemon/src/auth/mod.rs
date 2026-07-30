@@ -112,11 +112,14 @@ impl AuthManager {
             }
             Err(error) => {
                 // Keep the credential file because this can be a transient network failure,
-                // but do not claim that an unvalidated/expired token is authenticated.
-                tracing::warn!(
-                    "Could not validate stored token (keeping it for the next restart): {error}"
-                );
-                *self.state.write().await = None;
+                // but do not let an older restore attempt erase a newer login.
+                let _commit = self.commit_lock.lock().await;
+                if self.is_current_attempt(generation) {
+                    tracing::warn!(
+                        "Could not validate stored token (keeping it for the next restart): {error}"
+                    );
+                    *self.state.write().await = None;
+                }
             }
         }
         Ok(())
@@ -143,9 +146,9 @@ impl AuthManager {
         // Invalidate every in-flight PAT/device-flow attempt before touching state.
         self.begin_auth_attempt();
         let _commit = self.commit_lock.lock().await;
-        keychain::delete_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?;
+        let delete_result = keychain::delete_token(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
         *self.state.write().await = None;
-        Ok(())
+        delete_result
     }
 
     pub async fn status(&self) -> AuthStatus {
@@ -172,6 +175,9 @@ impl AuthManager {
     /// Initiate a GitHub Device Flow. Returns the user_code and verification_uri
     /// that should be shown to the user.
     pub async fn start_device_flow(&self) -> Result<DeviceFlowResponse> {
+        // A newly requested code supersedes any older poll immediately, even
+        // while GitHub is still returning this new code.
+        self.begin_auth_attempt();
         let client = reqwest::Client::new();
         let response = client
             .post(DEVICE_CODE_URL)
@@ -360,8 +366,7 @@ mod tests {
         let manager = authenticated_manager("octocat");
         // Verify authenticated first
         assert!(manager.status().await.authenticated);
-        // Logout — may fail on keychain, but state should still be cleared
-        let _ = manager.logout().await;
+        manager.logout().await.unwrap();
         let status = manager.status().await;
         assert!(!status.authenticated);
     }

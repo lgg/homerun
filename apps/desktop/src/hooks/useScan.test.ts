@@ -152,6 +152,67 @@ describe("useScan", () => {
     expect(result.current.scanError).toContain("GitHub unavailable");
   });
 
+  it("cancels IDs returned after cancellation was requested", async () => {
+    let resolveStart: ((ids: string[]) => void) | undefined;
+    mockedApi.startScan.mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useScan());
+
+    let runPromise: Promise<void> | undefined;
+    await act(async () => {
+      runPromise = result.current.runScan({ workspacePath: "/workspace", authenticated: true });
+      await Promise.resolve();
+      await result.current.cancelScan();
+    });
+
+    await act(async () => {
+      resolveStart?.(["late-1"]);
+      await runPromise;
+    });
+    expect(mockedApi.cancelScan).toHaveBeenCalledWith("late-1");
+
+    await act(async () => {
+      emitProgress({ type: "cancelled", scan_id: "late-1", scan_type: "local" });
+      await Promise.resolve();
+    });
+    expect(result.current.scanning).toBe(false);
+  });
+
+  it("does not re-add a scan that finished before startScan returned", async () => {
+    let resolveStart: ((ids: string[]) => void) | undefined;
+    mockedApi.startScan.mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useScan());
+
+    let runPromise: Promise<void> | undefined;
+    await act(async () => {
+      runPromise = result.current.runScan({ workspacePath: "/workspace", authenticated: true });
+      await Promise.resolve();
+    });
+    act(() => {
+      emitProgress({ type: "started", scan_id: "fast-1", scan_type: "local", total: 1 });
+      emitProgress({
+        type: "done",
+        scan_id: "fast-1",
+        scan_type: "local",
+        total_found: 0,
+        total_checked: 1,
+      });
+    });
+
+    await act(async () => {
+      resolveStart?.(["fast-1"]);
+      await runPromise;
+    });
+    expect(result.current.scanning).toBe(false);
+  });
+
   it("sets error when neither workspace nor auth is available", async () => {
     const { result } = renderHook(() => useScan());
 

@@ -79,6 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAuth({ authenticated: false, user: null });
     } catch (e) {
       const message = String(e);
+      operationGeneration.current += 1;
+      setAuth({ authenticated: false, user: null });
       setError(message);
       throw new Error(message);
     }

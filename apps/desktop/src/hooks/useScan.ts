@@ -15,6 +15,8 @@ export function useScan() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string | null>(null);
   const activeScanIds = useRef(new Set<string>());
+  const expectedScanIds = useRef(new Set<string>());
+  const terminalScanIds = useRef(new Set<string>());
   const launchPending = useRef(false);
   const scanningRef = useRef(false);
   const cancelRequested = useRef(false);
@@ -36,18 +38,17 @@ export function useScan() {
     } finally {
       scanningRef.current = false;
       cancelRequested.current = false;
+      expectedScanIds.current.clear();
+      terminalScanIds.current.clear();
       setScanning(false);
       setProgressText(null);
     }
   }, [refreshResults]);
 
-  // Load persisted results on mount.
   useEffect(() => {
     refreshResults().catch(() => {});
   }, [refreshResults]);
 
-  // Listen for scan progress events. IDs ensure delayed events from an older
-  // operation cannot finish or overwrite the current scan session.
   useEffect(() => {
     const unlisten = listen<string>("scan-progress", (event) => {
       try {
@@ -55,6 +56,8 @@ export function useScan() {
         if (!scanningRef.current) return;
 
         if (data.type === "started") {
+          if (!launchPending.current && !expectedScanIds.current.has(data.scan_id)) return;
+          if (terminalScanIds.current.has(data.scan_id)) return;
           activeScanIds.current.add(data.scan_id);
           setProgressText(`Starting ${data.scan_type} scan (${data.total} repositories)...`);
           return;
@@ -78,14 +81,13 @@ export function useScan() {
             );
             break;
           case "done":
-            activeScanIds.current.delete(data.scan_id);
-            void finishIfIdle();
-            break;
           case "cancelled":
+            terminalScanIds.current.add(data.scan_id);
             activeScanIds.current.delete(data.scan_id);
             void finishIfIdle();
             break;
           case "failed":
+            terminalScanIds.current.add(data.scan_id);
             activeScanIds.current.delete(data.scan_id);
             setScanError((current) =>
               [current, `${data.scan_type} scan failed: ${data.message}`]
@@ -101,7 +103,7 @@ export function useScan() {
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn()).catch(() => {});
     };
   }, [finishIfIdle]);
 
@@ -116,6 +118,8 @@ export function useScan() {
       }
 
       activeScanIds.current.clear();
+      expectedScanIds.current.clear();
+      terminalScanIds.current.clear();
       cancelRequested.current = false;
       launchPending.current = true;
       scanningRef.current = true;
@@ -125,16 +129,22 @@ export function useScan() {
 
       try {
         const scanIds = await api.startScan(workspacePath, authenticated);
-        for (const id of scanIds) activeScanIds.current.add(id);
+        expectedScanIds.current = new Set(scanIds);
+        activeScanIds.current = new Set(
+          scanIds.filter((scanId) => !terminalScanIds.current.has(scanId)),
+        );
         launchPending.current = false;
         if (cancelRequested.current) {
           setProgressText("Cancelling scan...");
-          await Promise.allSettled(scanIds.map((id) => api.cancelScan(id)));
+          await Promise.allSettled(scanIds.map((scanId) => api.cancelScan(scanId)));
         }
         await finishIfIdle();
       } catch (error) {
         launchPending.current = false;
         activeScanIds.current.clear();
+        expectedScanIds.current.clear();
+        terminalScanIds.current.clear();
+        cancelRequested.current = false;
         scanningRef.current = false;
         setScanError(String(error));
         setScanning(false);
