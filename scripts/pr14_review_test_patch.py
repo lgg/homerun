@@ -30,6 +30,11 @@ path.write_text(text, encoding="utf-8")
 path = Path("crates/daemon/src/auth/keychain.rs")
 text = path.read_text(encoding="utf-8")
 text = text.replace(
+    "use std::path::PathBuf;",
+    "#[cfg(not(test))]\nuse std::path::PathBuf;",
+    1,
+)
+text = text.replace(
     "/// Returns the path to the auth token file: `~/.homerun/auth.json`\nfn auth_file_path()",
     "/// Returns the path to the auth token file: `~/.homerun/auth.json`\n#[cfg(not(test))]\nfn auth_file_path()",
     1,
