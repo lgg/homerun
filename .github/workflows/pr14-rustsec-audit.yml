@@ -1,0 +1,40 @@
+name: PR14 RustSec Audit
+
+on:
+  pull_request:
+    branches: [master]
+    types: [synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-runtime-consistency-2026-07-31
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Capture workspace audit
+        shell: bash
+        run: |
+          set +e
+          cargo audit --json > /tmp/cargo-audit-workspace.json
+          echo "$?" > /tmp/cargo-audit-workspace.status
+          (cd apps/desktop/src-tauri && cargo audit --json > /tmp/cargo-audit-tauri.json)
+          echo "$?" > /tmp/cargo-audit-tauri.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr14-rustsec-audit
+          path: |
+            /tmp/cargo-audit-workspace.json
+            /tmp/cargo-audit-workspace.status
+            /tmp/cargo-audit-tauri.json
+            /tmp/cargo-audit-tauri.status
+          retention-days: 1
