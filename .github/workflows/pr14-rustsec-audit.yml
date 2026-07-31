@@ -6,10 +6,10 @@ on:
     types: [synchronize]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  audit-and-verify:
+  ubuntu-verify:
     if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -17,7 +17,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: audit/post-merge-runtime-consistency-2026-07-31
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -26,84 +25,25 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-
-      - name: Apply audited fixes
-        shell: bash
+      - name: Verify clean source tree
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          cargo_path = Path('crates/tui/Cargo.toml')
-          cargo_text = cargo_path.read_text(encoding='utf-8')
-          cargo_text = cargo_text.replace('ratatui = "0.29"', 'ratatui = "0.30.2"')
-          cargo_text = cargo_text.replace('crossterm = "0.28"', 'crossterm = "0.29"')
-          cargo_path.write_text(cargo_text, encoding='utf-8')
-
-          page_path = Path('apps/desktop/src/pages/Repositories.tsx')
-          page_text = page_path.read_text(encoding='utf-8')
-          page_text = page_text.replace(
-              '  const { auth } = useAuth();',
-              '  const { auth, loading: authLoading } = useAuth();',
-          )
-          old_effect = '''  useEffect(() => {
-              if (!preferences || autoScanAttempted.current) return;
-              if (scanning) {
-                autoScanAttempted.current = true;
-                return;
-              }
-
-              autoScanAttempted.current = true;
-              if (preferences.auto_scan && (preferences.workspace_path || auth.authenticated)) {
-                void runScan({
-                  workspacePath: preferences.workspace_path,
-                  authenticated: auth.authenticated,
-                });
-              }
-            }, [scanning, preferences, auth.authenticated, runScan]);'''
-          new_effect = '''  useEffect(() => {
-              if (!preferences || authLoading || autoScanAttempted.current) return;
-              if (scanning) {
-                autoScanAttempted.current = true;
-                return;
-              }
-
-              autoScanAttempted.current = true;
-              if (preferences.auto_scan && (preferences.workspace_path || auth.authenticated)) {
-                void runScan({
-                  workspacePath: preferences.workspace_path,
-                  authenticated: auth.authenticated,
-                });
-              }
-            }, [scanning, preferences, auth.authenticated, authLoading, runScan]);'''
-          if old_effect in page_text:
-              page_text = page_text.replace(old_effect, new_effect)
-          elif new_effect not in page_text:
-              raise SystemExit('Repositories auto-scan effect no longer matches the audited form')
-          page_path.write_text(page_text, encoding='utf-8')
-          PY
-          cargo update -p ratatui --precise 0.30.2
-          cargo update -p crossterm --precise 0.29.0
-          cargo fmt --all
+          cargo fmt --all -- --check
           git diff --check
-
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
-
       - name: Verify frontend
         working-directory: apps/desktop
         run: |
           npm run test:coverage
           npm exec -- tsc --noEmit
           npm run build
-
       - name: Verify Rust workspace
         run: |
           cargo test --workspace --all-targets
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo build --release -p homerun -p homerund
           ./target/release/homerun --help
-
       - name: Verify soundness dependencies
         shell: bash
         run: |
@@ -119,19 +59,6 @@ jobs:
             exit 1
           fi
 
-      - name: Commit verified audit fixes
-        shell: bash
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/tui/Cargo.toml Cargo.lock apps/desktop/src/pages/Repositories.tsx
-          if git diff --cached --quiet; then
-            echo 'Audited files are already up to date'
-            exit 0
-          fi
-          git commit -m 'fix: finalize dependency and auto-scan audit'
-          git push origin HEAD:audit/post-merge-runtime-consistency-2026-07-31
-
   windows-verify:
     if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
     runs-on: windows-2025
@@ -140,7 +67,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: audit/post-merge-runtime-consistency-2026-07-31
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
