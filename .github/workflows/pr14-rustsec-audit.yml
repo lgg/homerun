@@ -54,7 +54,7 @@ jobs:
             echo 'Old unsound lru version is still reachable'
             exit 1
           fi
-          cargo tree -i lru@0.18.0
+          cargo tree -i lru@0.18.1
           if cargo tree -i paste@1.0.15 >/tmp/paste.txt 2>&1; then
             cat /tmp/paste.txt
             echo 'Unmaintained paste dependency is still reachable'
@@ -67,5 +67,9 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add crates/tui/Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo 'Dependency files are already up to date'
+            exit 0
+          fi
           git commit -m 'fix: update TUI soundness dependencies'
           git push origin HEAD:audit/post-merge-runtime-consistency-2026-07-31
