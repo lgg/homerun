@@ -48,18 +48,8 @@ jobs:
           from pathlib import Path
           path = Path('crates/daemon/src/scanner/mod.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        if name_str.starts_with('.') && name_str != ".github" {
-              continue;
-          }
-
-          '''
-          new = '''        if (name_str.starts_with('.') && name_str != ".github")
-              || should_skip_directory(name_str.as_ref())
-          {
-              continue;
-          }
-
-          '''
+          old = "        if name_str.starts_with('.') && name_str != \".github\" {\n            continue;\n        }\n"
+          new = "        if (name_str.starts_with('.') && name_str != \".github\")\n            || should_skip_directory(name_str.as_ref())\n        {\n            continue;\n        }\n"
           if text.count(old) != 1:
               raise SystemExit(f'expected one progress scanner block, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
