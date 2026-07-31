@@ -185,6 +185,12 @@ mod windows {
 
     /// Remove the HomeRun daemon from the Windows Registry Run key.
     pub fn uninstall_daemon_service() -> Result<()> {
+        // Query first instead of parsing localized `reg delete` error text.
+        if !is_daemon_installed() {
+            tracing::info!("Daemon Registry Run entry is not installed");
+            return Ok(());
+        }
+
         let output = std::process::Command::new("reg")
             .args([
                 "delete",
@@ -198,10 +204,7 @@ mod windows {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Not an error if the value doesn't exist
-            if !stderr.contains("unable to find") {
-                anyhow::bail!("reg delete failed: {}", stderr.trim());
-            }
+            anyhow::bail!("reg delete failed: {}", stderr.trim());
         }
 
         tracing::info!("Daemon removed from Registry Run key");

@@ -25,7 +25,7 @@ function countByState(runners: RunnerInfo[]): Record<string, number> {
 const MINI_WIDTH = 280;
 
 export function MiniView() {
-  const { runners, error } = useRunners();
+  const { runners, loading, error } = useRunners();
   const positionSaved = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -47,7 +47,7 @@ export function MiniView() {
     });
 
   const counts = countByState(runners);
-  const daemonOk = error === null;
+  const daemonOk = !loading && error === null;
   useTrayIcon(runners, daemonOk);
 
   // Resize window when content changes

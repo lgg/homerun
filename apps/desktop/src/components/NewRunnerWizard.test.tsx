@@ -274,6 +274,31 @@ describe("NewRunnerWizard", () => {
     expect(await screen.findByPlaceholderText("Search repositories...")).toBeInTheDocument();
   });
 
+  it("keeps a locally discovered repository that is absent from the remote list", async () => {
+    vi.mocked(api.listRepos).mockResolvedValue([]);
+    const localRepo = makeRepo({
+      id: 0,
+      full_name: "local/project",
+      owner: "local",
+      name: "project",
+      html_url: "",
+    });
+    const { props } = await renderWizard({
+      preselectedRepo: localRepo.full_name,
+      preselectedRepoDetails: localRepo,
+    });
+
+    const nameInput = await screen.findByLabelText("Name");
+    expect((nameInput as HTMLInputElement).value).toMatch(/^project-runner-/);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch Runner" }));
+
+    await waitFor(() => expect(props.onCreate).toHaveBeenCalledTimes(1));
+    expect(props.onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ repo_full_name: "local/project" }),
+    );
+  });
+
   it("falls back to repository selection when a preselected repository is stale", async () => {
     await renderWizard({ preselectedRepo: "org/removed" });
 

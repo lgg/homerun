@@ -25,8 +25,8 @@ function stateLabel(state: string): string {
 const TRAY_PANEL_WIDTH = 300;
 
 export function TrayPanel() {
-  const { runners, error } = useRunners();
-  const daemonOk = error === null;
+  const { runners, loading, error } = useRunners();
+  const daemonOk = !loading && error === null;
   const [daemonStopping, setDaemonStopping] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 

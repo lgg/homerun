@@ -21,6 +21,7 @@ interface NewRunnerWizardProps {
   onCreate: (req: CreateRunnerRequest) => Promise<RunnerInfo>;
   onCreateBatch: (req: CreateBatchRequest) => Promise<BatchCreateResponse>;
   preselectedRepo?: string;
+  preselectedRepoDetails?: RepoInfo;
 }
 
 // Empty default — the daemon sets platform-appropriate labels (e.g. self-hosted, Windows, X64)
@@ -44,6 +45,7 @@ export function NewRunnerWizard({
   onCreate,
   onCreateBatch,
   preselectedRepo,
+  preselectedRepoDetails,
 }: NewRunnerWizardProps) {
   const { repos, loading: reposLoading } = useRepos();
   const [step, setStep] = useState<0 | 1 | 2>(preselectedRepo ? 1 : 0);
@@ -70,7 +72,9 @@ export function NewRunnerWizard({
     }
     if (reposLoading) return;
 
-    const found = repos.find((r) => r.full_name === preselectedRepo) ?? null;
+    const provided =
+      preselectedRepoDetails?.full_name === preselectedRepo ? preselectedRepoDetails : null;
+    const found = repos.find((r) => r.full_name === preselectedRepo) ?? provided;
     if (resolvedPreselectFor === preselectedRepo) {
       if (selectedRepo?.full_name === preselectedRepo) {
         if (found) return;
@@ -97,7 +101,14 @@ export function NewRunnerWizard({
       setName("");
       setStep(0);
     }
-  }, [preselectedRepo, repos, reposLoading, resolvedPreselectFor, selectedRepo]);
+  }, [
+    preselectedRepo,
+    preselectedRepoDetails,
+    repos,
+    reposLoading,
+    resolvedPreselectFor,
+    selectedRepo,
+  ]);
 
   const [mode, setMode] = useState<RunnerModeChoice>("app");
   const [containerImage, setContainerImage] = useState(DEFAULT_CONTAINER_IMAGE);

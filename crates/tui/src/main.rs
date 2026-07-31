@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
+    cursor::Show,
     event::KeyEventKind,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -15,6 +16,16 @@ use homerun::app::{Action, App};
 use homerun::client::DaemonClient;
 use homerun::event::{start_event_loop, start_ws_forwarding, AppEvent};
 use homerun::ui;
+
+struct TerminalRestoreGuard;
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, LeaveAlternateScreen, Show);
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -195,6 +206,7 @@ async fn run_tui() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let terminal_restore = TerminalRestoreGuard;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -328,6 +340,7 @@ async fn run_tui() -> Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
+    std::mem::forget(terminal_restore);
 
     // Force exit — spawn_blocking tasks can keep the tokio runtime alive
     std::process::exit(0);

@@ -4,6 +4,7 @@ import { api } from "../api/commands";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import type { DeviceFlowResponse, Preferences } from "../api/types";
+import { openExternal } from "../utils/openExternal";
 
 type DeviceFlowState =
   | { stage: "idle" }
@@ -60,6 +61,19 @@ export function Settings() {
     auto_scan: false,
   });
 
+  const desiredPreferencesRef = useRef(preferences);
+  const persistedPreferencesRef = useRef(preferences);
+  const preferenceVersionRef = useRef(0);
+  const preferenceSavePromiseRef = useRef<Promise<void> | null>(null);
+  const settingsMountedRef = useRef(true);
+
+  useEffect(() => {
+    settingsMountedRef.current = true;
+    return () => {
+      settingsMountedRef.current = false;
+    };
+  }, []);
+
   // Check launch-at-login status on mount
   useEffect(() => {
     invoke<boolean>("service_status")
@@ -68,6 +82,8 @@ export function Settings() {
     api
       .getPreferences()
       .then((saved) => {
+        desiredPreferencesRef.current = saved;
+        persistedPreferencesRef.current = saved;
         setPreferences(saved);
         setWorkspaceInput(saved.workspace_path ?? "");
       })
@@ -82,31 +98,64 @@ export function Settings() {
     setLabelsInput(preferences.scan_labels.join(", "));
   }, [preferences.scan_labels]);
 
-  async function persistPreferences(updated: Preferences) {
-    if (preferencesLoading || preferencesSaving) return;
-    const previous = preferences;
-    setPreferences(updated);
-    setPreferencesSaving(true);
-    setPreferencesError(null);
-    try {
-      const saved = await api.updatePreferences(updated);
-      setPreferences(saved);
-      setWorkspaceInput(saved.workspace_path ?? "");
-    } catch (error) {
-      setPreferences(previous);
-      setWorkspaceInput(previous.workspace_path ?? "");
-      setPreferencesError(String(error));
-    } finally {
-      setPreferencesSaving(false);
-    }
-  }
+  const flushPreferences = useCallback((): Promise<void> => {
+    const existing = preferenceSavePromiseRef.current;
+    if (existing) return existing;
+
+    const promise = (async () => {
+      if (settingsMountedRef.current) {
+        setPreferencesSaving(true);
+        setPreferencesError(null);
+      }
+      try {
+        while (
+          settingsMountedRef.current &&
+          desiredPreferencesRef.current !== persistedPreferencesRef.current
+        ) {
+          const version = preferenceVersionRef.current;
+          const snapshot = desiredPreferencesRef.current;
+          const saved = await api.updatePreferences(snapshot);
+          persistedPreferencesRef.current = saved;
+
+          if (version === preferenceVersionRef.current) {
+            desiredPreferencesRef.current = saved;
+            setPreferences(saved);
+            setWorkspaceInput(saved.workspace_path ?? "");
+          }
+        }
+      } catch (error) {
+        preferenceVersionRef.current += 1;
+        desiredPreferencesRef.current = persistedPreferencesRef.current;
+        if (settingsMountedRef.current) {
+          setPreferences(persistedPreferencesRef.current);
+          setWorkspaceInput(persistedPreferencesRef.current.workspace_path ?? "");
+          setPreferencesError(String(error));
+        }
+      } finally {
+        if (settingsMountedRef.current) setPreferencesSaving(false);
+      }
+    })();
+
+    preferenceSavePromiseRef.current = promise;
+    void promise.finally(() => {
+      if (preferenceSavePromiseRef.current === promise) {
+        preferenceSavePromiseRef.current = null;
+      }
+    });
+    return promise;
+  }, []);
 
   function updatePreference(key: keyof Preferences, value: boolean) {
-    void persistPreferences({ ...preferences, [key]: value });
+    updatePreferences({ [key]: value });
   }
 
   function updatePreferences(updates: Partial<Preferences>) {
-    void persistPreferences({ ...preferences, ...updates });
+    if (preferencesLoading) return;
+    const updated = { ...desiredPreferencesRef.current, ...updates };
+    desiredPreferencesRef.current = updated;
+    preferenceVersionRef.current += 1;
+    setPreferences(updated);
+    void flushPreferences();
   }
 
   const pollInBackground = useCallback(
@@ -755,8 +804,10 @@ function AboutLink({
   return (
     <a
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        void openExternal(href);
+      }}
       style={{
         display: "inline-flex",
         alignItems: "center",

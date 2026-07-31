@@ -96,6 +96,22 @@ pub struct ScanOutcome {
 // Local scan
 // ---------------------------------------------------------------------------
 
+fn should_skip_directory(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "node_modules"
+            | "target"
+            | "vendor"
+            | "dist"
+            | "build"
+            | "coverage"
+            | ".next"
+            | ".venv"
+            | "venv"
+            | "out"
+    )
+}
+
 /// Recursively walk `workspace_dir`, find all `.github/workflows/*.yml` files,
 /// and return repos that have at least one workflow with a matching `runs-on:` label.
 pub async fn scan_local(workspace_dir: &Path, labels: &[String]) -> Result<Vec<DiscoveredRepo>> {
@@ -148,8 +164,10 @@ async fn collect_workflow_files(
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // Skip hidden directories other than `.github`
-        if name_str.starts_with('.') && name_str != ".github" {
+        // Skip hidden and generated/vendor trees that cannot be workspace repos.
+        if (name_str.starts_with('.') && name_str != ".github")
+            || should_skip_directory(name_str.as_ref())
+        {
             continue;
         }
 
@@ -195,21 +213,17 @@ async fn process_workflows_dir(
         }
 
         if let Ok(content) = fs::read_to_string(&path).await {
-            let file_matched = labels
-                .iter()
-                .any(|label| content.contains(&format!("runs-on: {}", label)));
-            if file_matched {
+            let file_matches = crate::workflow::matching_runs_on_labels(&content, labels);
+            if !file_matches.is_empty() {
                 let rel = path
                     .strip_prefix(repo_root)
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
                 matching_files.push(rel);
-                for label in labels {
-                    if content.contains(&format!("runs-on: {}", label))
-                        && !matched_labels.contains(label)
-                    {
-                        matched_labels.push(label.clone());
+                for label in file_matches {
+                    if !matched_labels.contains(&label) {
+                        matched_labels.push(label);
                     }
                 }
             }
@@ -284,7 +298,9 @@ async fn discover_repos_recursive(
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if name_str.starts_with('.') && name_str != ".github" {
+        if (name_str.starts_with('.') && name_str != ".github")
+            || should_skip_directory(name_str.as_ref())
+        {
             continue;
         }
 
@@ -331,21 +347,17 @@ async fn check_workflows_dir(
         }
 
         if let Ok(content) = fs::read_to_string(&path).await {
-            let file_matches = labels
-                .iter()
-                .any(|label| content.contains(&format!("runs-on: {}", label)));
-            if file_matches {
+            let file_matches = crate::workflow::matching_runs_on_labels(&content, labels);
+            if !file_matches.is_empty() {
                 let rel = path
                     .strip_prefix(repo_root)
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .to_string();
                 matching_files.push(rel);
-                for label in labels {
-                    if content.contains(&format!("runs-on: {}", label))
-                        && !matched_labels.contains(label)
-                    {
-                        matched_labels.push(label.clone());
+                for label in file_matches {
+                    if !matched_labels.contains(&label) {
+                        matched_labels.push(label);
                     }
                 }
             }
@@ -812,6 +824,43 @@ mod tests {
         assert_eq!(repos.len(), 1);
         assert!(repos[0].matched_labels.contains(&"self-hosted".to_string()));
         assert!(repos[0].matched_labels.contains(&"gpu".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_local_scan_supports_standard_runs_on_yaml_forms() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("project");
+        std_fs::create_dir_all(&repo).unwrap();
+        init_git_remote(&repo, "git@github.com:acme/project.git");
+        create_workflow(
+            &repo,
+            "array.yml",
+            "jobs:\n  build:\n    runs-on: [self-hosted, linux, x64]\n",
+        );
+        create_workflow(
+            &repo,
+            "block.yaml",
+            "jobs:\n  test:\n    runs-on:\n      - self-hosted\n      - linux\n",
+        );
+
+        let labels = vec!["self-hosted".to_string(), "linux".to_string()];
+        let repos = scan_local(tmp.path(), &labels).await.unwrap();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].workflow_files.len(), 2);
+        assert_eq!(repos[0].matched_labels, vec!["linux", "self-hosted"]);
+    }
+
+    #[tokio::test]
+    async fn test_local_scan_skips_generated_dependency_trees() {
+        let tmp = TempDir::new().unwrap();
+        let generated = tmp.path().join("node_modules/dependency");
+        std_fs::create_dir_all(&generated).unwrap();
+        init_git_remote(&generated, "git@github.com:vendor/dependency.git");
+        create_workflow(&generated, "ci.yml", "runs-on: self-hosted\n");
+
+        let labels = vec!["self-hosted".to_string()];
+        let repos = scan_local(tmp.path(), &labels).await.unwrap();
+        assert!(repos.is_empty());
     }
 
     #[tokio::test]

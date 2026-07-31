@@ -3,7 +3,7 @@ import { useNavigate, useOutletContext } from "react-router";
 import { useRepos } from "../hooks/useRepos";
 import { useScan } from "../hooks/useScan";
 import type { RunnersContextType } from "../hooks/useRunners";
-import type { Preferences, DiscoveredRepo } from "../api/types";
+import type { Preferences, DiscoveredRepo, RepoInfo } from "../api/types";
 import { useAuth } from "../hooks/useAuth";
 import { NewRunnerWizard } from "../components/NewRunnerWizard";
 import { api } from "../api/commands";
@@ -17,7 +17,8 @@ export function Repositories() {
     useScan();
   const [search, setSearch] = useState("");
   const [showEnriched, setShowEnriched] = useState(true);
-  const [wizardRepo, setWizardRepo] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardRepo, setWizardRepo] = useState<RepoInfo | null>(null);
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
@@ -176,7 +177,13 @@ export function Repositories() {
             </button>
           )}
           {auth.authenticated ? (
-            <button className="btn btn-primary" onClick={() => setWizardRepo("")}>
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                setWizardRepo(null);
+                setWizardOpen(true);
+              }}
+            >
               + Add Runner
             </button>
           ) : (
@@ -489,9 +496,14 @@ export function Repositories() {
                   <button
                     className="btn btn-primary"
                     style={{ fontSize: 12, padding: "4px 12px" }}
-                    onClick={() =>
-                      auth.authenticated ? setWizardRepo(repo.full_name) : navigate("/settings")
-                    }
+                    onClick={() => {
+                      if (auth.authenticated) {
+                        setWizardRepo(repo);
+                        setWizardOpen(true);
+                      } else {
+                        navigate("/settings");
+                      }
+                    }}
                   >
                     {auth.authenticated ? "+ Add Runner" : "Sign in to add"}
                   </button>
@@ -502,12 +514,16 @@ export function Repositories() {
         </div>
       )}
 
-      {wizardRepo !== null && (
+      {wizardOpen && (
         <NewRunnerWizard
-          onClose={() => setWizardRepo(null)}
+          onClose={() => {
+            setWizardOpen(false);
+            setWizardRepo(null);
+          }}
           onCreate={createRunner}
           onCreateBatch={createBatch}
-          preselectedRepo={wizardRepo || undefined}
+          preselectedRepo={wizardRepo?.full_name}
+          preselectedRepoDetails={wizardRepo ?? undefined}
         />
       )}
     </div>

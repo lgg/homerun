@@ -11,3 +11,4 @@ pub mod runner;
 pub mod scanner;
 pub mod server;
 pub mod updater;
+pub mod workflow;

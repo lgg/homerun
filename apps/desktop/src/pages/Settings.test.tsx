@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getPreferences: vi.fn(),
   updatePreferences: vi.fn(),
   invoke: vi.fn(),
+  openExternal: vi.fn(),
 }));
 
 vi.mock("../hooks/useAuth", () => ({
@@ -34,6 +35,7 @@ vi.mock("../api/commands", () => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.9.1") }));
+vi.mock("../utils/openExternal", () => ({ openExternal: mocks.openExternal }));
 
 const preferences: Preferences = {
   start_runners_on_launch: false,
@@ -48,7 +50,50 @@ describe("Settings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.invoke.mockResolvedValue(false);
+    mocks.getPreferences.mockResolvedValue(preferences);
     mocks.updatePreferences.mockImplementation(async (value: Preferences) => value);
+  });
+
+  it("serializes rapid preference changes without losing either update", async () => {
+    let resolveFirst: ((value: Preferences) => void) | undefined;
+    mocks.updatePreferences
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockImplementation(async (value: Preferences) => value);
+
+    render(<Settings />);
+    const restore = await screen.findByRole("switch", { name: "Restore runners on launch" });
+    const completions = screen.getByRole("switch", { name: "Job completions" });
+    await waitFor(() => expect(restore).not.toBeDisabled());
+
+    act(() => {
+      restore.click();
+      completions.click();
+    });
+    expect(mocks.updatePreferences).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst?.({ ...preferences, start_runners_on_launch: true });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(mocks.updatePreferences).toHaveBeenCalledTimes(2));
+    expect(mocks.updatePreferences).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_runners_on_launch: true,
+        notify_job_completions: false,
+      }),
+    );
+  });
+
+  it("opens About links through the Tauri shell bridge", async () => {
+    render(<Settings />);
+    const repository = await screen.findByRole("link", { name: "Repository" });
+    fireEvent.click(repository);
+    expect(mocks.openExternal).toHaveBeenCalledWith("https://github.com/lgg/homerun");
   });
 
   it("keeps preference controls disabled until saved preferences are loaded", async () => {
