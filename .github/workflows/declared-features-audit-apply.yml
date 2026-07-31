@@ -1,3 +1,4 @@
+# Triggered only to let the trusted master workflow apply the audited patch.
 name: Apply declared features audit fixes
 
 on:
