@@ -1,18 +1,19 @@
 name: Apply declared features audit fixes
 
 on:
-  push:
-    branches:
-      - audit/declared-features-completion-2026-07-31
-    paths:
-      - .github/audit/apply_declared_features.py
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: add declared features audit patch'
+    if: >-
+      github.head_ref == 'audit/declared-features-completion-2026-07-31' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      hashFiles('.github/audit/apply_declared_features.py') != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
