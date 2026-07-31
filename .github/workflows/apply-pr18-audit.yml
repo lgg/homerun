@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Correct audited patch matcher
+      - name: Align audited patch matcher
         shell: bash
         run: |
           python - <<'PY'
@@ -32,19 +32,7 @@ jobs:
           path = Path('.github/audit/apply_declared_features.py')
           text = path.read_text(encoding='utf-8')
           old = 'replace("crates/daemon/src/scanner/mod.rs", skip_anchor, skip_replacement, count=2)'
-          new = '''replace("crates/daemon/src/scanner/mod.rs", skip_anchor, skip_replacement, count=1)
-
-          second_skip_anchor = ''' + '"""' + '''        if name_str.starts_with('.') && name_str != ".github" {
-              continue;
-          }
-
-          ''' + '"""' + '''
-          replace(
-              "crates/daemon/src/scanner/mod.rs",
-              second_skip_anchor,
-              skip_replacement,
-              count=1,
-          )'''
+          new = 'replace("crates/daemon/src/scanner/mod.rs", skip_anchor, skip_replacement, count=1)'
           if old not in text:
               raise SystemExit('expected scanner matcher was not found')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
@@ -53,6 +41,29 @@ jobs:
         run: |
           test -f .github/audit/apply_declared_features.py
           python .github/audit/apply_declared_features.py
+      - name: Skip generated trees in the progress scanner
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/daemon/src/scanner/mod.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''        if name_str.starts_with('.') && name_str != ".github" {
+              continue;
+          }
+
+          '''
+          new = '''        if (name_str.starts_with('.') && name_str != ".github")
+              || should_skip_directory(name_str.as_ref())
+          {
+              continue;
+          }
+
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one progress scanner block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Commit product changes
         run: |
           git config user.name github-actions[bot]
