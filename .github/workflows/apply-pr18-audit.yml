@@ -1,4 +1,4 @@
-name: Apply PR 18 audit patch
+name: PR 18 Final Verification
 
 on:
   pull_request:
@@ -6,76 +6,66 @@ on:
     types: [synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  ubuntu-verify:
     if: >-
       github.event.pull_request.number == 18 &&
       github.head_ref == 'audit/declared-features-completion-2026-07-31' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          ref: audit/declared-features-completion-2026-07-31
-          fetch-depth: 0
-      - uses: actions/setup-python@v6
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v6
         with:
-          python-version: '3.13'
-      - name: Align audited patch matcher
-        shell: bash
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Verify clean committed tree
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/audit/apply_declared_features.py')
-          text = path.read_text(encoding='utf-8')
-          old = 'replace("crates/daemon/src/scanner/mod.rs", skip_anchor, skip_replacement, count=2)'
-          new = 'replace("crates/daemon/src/scanner/mod.rs", skip_anchor, skip_replacement, count=1)'
-          if old not in text:
-              raise SystemExit('expected scanner matcher was not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Apply audited fixes
+          git diff --check
+          cargo fmt --all -- --check
+          test -z "$(git ls-files apps/desktop/coverage)"
+          test ! -e .github/audit/apply_declared_features.py
+          test ! -e .github/workflows/declared-features-audit-apply.yml
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Verify frontend
+        working-directory: apps/desktop
         run: |
-          test -f .github/audit/apply_declared_features.py
-          python .github/audit/apply_declared_features.py
-      - name: Skip generated trees in the progress scanner
-        shell: bash
+          npm run test:coverage
+          npm exec -- tsc --noEmit
+          npm run build
+      - name: Verify Rust workspace
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('crates/daemon/src/scanner/mod.rs')
-          text = path.read_text(encoding='utf-8')
-          old = "        if name_str.starts_with('.') && name_str != \".github\" {\n            continue;\n        }\n"
-          new = "        if (name_str.starts_with('.') && name_str != \".github\")\n            || should_skip_directory(name_str.as_ref())\n        {\n            continue;\n        }\n"
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one progress scanner block, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Commit product changes
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          ./target/release/homerun --help
+
+  windows-verify:
+    if: >-
+      github.event.pull_request.number == 18 &&
+      github.head_ref == 'audit/declared-features-completion-2026-07-31' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify Windows Rust workspace
+        shell: pwsh
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            crates/daemon/src/lib.rs \
-            crates/daemon/src/workflow.rs \
-            crates/daemon/src/github/mod.rs \
-            crates/daemon/src/scanner/mod.rs \
-            crates/daemon/src/platform/service.rs \
-            crates/tui/src/main.rs \
-            apps/desktop/src/components/NewRunnerWizard.tsx \
-            apps/desktop/src/components/NewRunnerWizard.test.tsx \
-            apps/desktop/src/pages/Repositories.tsx \
-            apps/desktop/src/pages/Settings.tsx \
-            apps/desktop/src/pages/Settings.test.tsx \
-            apps/desktop/src/components/Layout.tsx \
-            apps/desktop/src/pages/MiniView.tsx \
-            apps/desktop/src/pages/TrayPanel.tsx \
-            apps/desktop/src/pages/Daemon.tsx \
-            .github/audit/apply_declared_features.py \
-            .github/workflows/declared-features-audit-apply.yml
-          git diff --cached --check
-          git commit -m "fix: complete declared discovery and desktop flows"
-          git push origin HEAD:audit/declared-features-completion-2026-07-31
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          .\target\release\homerun.exe --help
