@@ -2,6 +2,7 @@ name: Restart stuck Moira runner
 
 on:
   push:
+    branches: [master]
     paths:
       - .github/workflows/restart-moira-runner.yml
   pull_request:
@@ -15,6 +16,9 @@ permissions:
 
 jobs:
   restart:
+    # Pull requests from forks must never be able to schedule work on the
+    # persistent self-hosted machine or restart a local runner listener.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 5
     steps:
