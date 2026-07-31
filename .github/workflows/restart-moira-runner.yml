@@ -4,6 +4,10 @@ on:
   push:
     paths:
       - .github/workflows/restart-moira-runner.yml
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/restart-moira-runner.trigger
   workflow_dispatch:
 
 permissions:
