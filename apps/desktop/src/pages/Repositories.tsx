@@ -9,7 +9,7 @@ import { NewRunnerWizard } from "../components/NewRunnerWizard";
 import { api } from "../api/commands";
 
 export function Repositories() {
-  const { auth } = useAuth();
+  const { auth, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { repos, loading: reposLoading, error: reposError } = useRepos(auth.authenticated);
   const { runners, createRunner, createBatch } = useOutletContext<RunnersContextType>();
@@ -34,7 +34,7 @@ export function Repositories() {
   // Auto-scan at most once for this page mount. Depending directly on the
   // scanning state without this latch would start a new scan after every finish.
   useEffect(() => {
-    if (!preferences || autoScanAttempted.current) return;
+    if (!preferences || authLoading || autoScanAttempted.current) return;
     if (scanning) {
       autoScanAttempted.current = true;
       return;
@@ -47,7 +47,7 @@ export function Repositories() {
         authenticated: auth.authenticated,
       });
     }
-  }, [scanning, preferences, auth.authenticated, runScan]);
+  }, [scanning, preferences, auth.authenticated, authLoading, runScan]);
 
   // Count runners per repo full_name
   const runnerCountByRepo = useMemo(() => {
