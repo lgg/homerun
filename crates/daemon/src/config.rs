@@ -1,3 +1,4 @@
+use crate::persistence::atomic_write;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -106,11 +107,8 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, toml::to_string_pretty(self)?)?;
-        Ok(())
+        let serialized = toml::to_string_pretty(self)?;
+        atomic_write(path, serialized.as_bytes(), Some(0o600))
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {

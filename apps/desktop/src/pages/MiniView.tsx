@@ -8,13 +8,15 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 function countByState(runners: RunnerInfo[]): Record<string, number> {
   const counts: Record<string, number> = {};
-  for (const r of runners) {
+  for (const runner of runners) {
     const key =
-      r.state === "busy"
+      runner.state === "busy"
         ? "busy"
-        : r.state === "offline" || r.state === "error"
-          ? "offline"
-          : "online";
+        : runner.state === "online"
+          ? "online"
+          : runner.state === "offline" || runner.state === "error"
+            ? "offline"
+            : "transitioning";
     counts[key] = (counts[key] || 0) + 1;
   }
   return counts;
@@ -91,6 +93,9 @@ export function MiniView() {
           {(counts.offline || 0) > 0 && (
             <span className="mini-count offline">{counts.offline} off</span>
           )}
+          {(counts.transitioning || 0) > 0 && (
+            <span className="mini-count">{counts.transitioning} changing</span>
+          )}
         </div>
       </div>
 
@@ -101,7 +106,9 @@ export function MiniView() {
             <div className="mini-runner-top">
               <span
                 className="mini-runner-name"
-                title={runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined}
+                title={
+                  runner.config.display_name ? `GitHub runner: ${runner.config.name}` : undefined
+                }
               >
                 {runner.config.display_name ?? runner.config.name}
               </span>

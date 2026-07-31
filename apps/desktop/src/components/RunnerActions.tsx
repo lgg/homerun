@@ -163,9 +163,7 @@ export function RunnerActions({
         )}
       </div>
 
-      {renameOpen && (
-        <RenameRunnerDialog runner={runner} onClose={() => setRenameOpen(false)} />
-      )}
+      {renameOpen && <RenameRunnerDialog runner={runner} onClose={() => setRenameOpen(false)} />}
 
       {confirm === "delete" && (
         <ConfirmDialog

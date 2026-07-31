@@ -13,12 +13,15 @@ pub async fn update_preferences(
     Json(prefs): Json<Preferences>,
 ) -> Result<Json<Preferences>, (StatusCode, String)> {
     let mut config = state.config.write().await;
-    config.preferences = prefs.clone();
+    let mut updated = config.clone();
+    updated.preferences = prefs.clone();
 
-    let config_path = config.config_path();
-    config
+    let config_path = updated.config_path();
+    updated
         .save(&config_path)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    *config = updated;
+    drop(config);
 
     state
         .notifications

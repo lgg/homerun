@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { useNavigate, useOutletContext } from "react-router";
 import { useRepos } from "../hooks/useRepos";
 import { useScan } from "../hooks/useScan";
 import type { RunnersContextType } from "../hooks/useRunners";
@@ -9,7 +9,7 @@ import { NewRunnerWizard } from "../components/NewRunnerWizard";
 import { api } from "../api/commands";
 
 export function Repositories() {
-  const { auth } = useAuth();
+  const { auth, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { repos, loading: reposLoading, error: reposError } = useRepos(auth.authenticated);
   const { runners, createRunner, createBatch } = useOutletContext<RunnersContextType>();
@@ -21,6 +21,7 @@ export function Repositories() {
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const autoScanAttempted = useRef(false);
 
   // Load preferences on mount
   useEffect(() => {
@@ -30,15 +31,23 @@ export function Repositories() {
       .catch(() => {});
   }, []);
 
-  // Auto-scan on mount if enabled
+  // Auto-scan at most once for this page mount. Depending directly on the
+  // scanning state without this latch would start a new scan after every finish.
   useEffect(() => {
-    if (preferences?.auto_scan && (preferences.workspace_path || auth.authenticated)) {
+    if (!preferences || authLoading || autoScanAttempted.current) return;
+    if (scanning) {
+      autoScanAttempted.current = true;
+      return;
+    }
+
+    autoScanAttempted.current = true;
+    if (preferences.auto_scan && (preferences.workspace_path || auth.authenticated)) {
       void runScan({
         workspacePath: preferences.workspace_path,
         authenticated: auth.authenticated,
       });
     }
-  }, [preferences?.auto_scan, preferences?.workspace_path, auth.authenticated, runScan]);
+  }, [scanning, preferences, auth.authenticated, authLoading, runScan]);
 
   // Count runners per repo full_name
   const runnerCountByRepo = useMemo(() => {
@@ -515,7 +524,9 @@ function FilterPill({
   onClick: () => void;
 }) {
   return (
-    <span
+    <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
       style={{
         fontSize: 12,
@@ -525,9 +536,10 @@ function FilterPill({
         color: active ? "var(--accent-blue)" : "var(--text-secondary)",
         cursor: "pointer",
         border: `1px solid ${active ? "rgba(31, 111, 235, 0.4)" : "var(--border)"}`,
+        fontFamily: "inherit",
       }}
     >
       {label}
-    </span>
+    </button>
   );
 }

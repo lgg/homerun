@@ -30,7 +30,7 @@
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
   </a>
   <a href="https://github.com/lgg/homerun/releases/latest">
-    <img src="https://img.shields.io/github/v/release/aGallea/homerun" alt="Latest Release" />
+    <img src="https://img.shields.io/github/v/release/lgg/homerun" alt="Latest Release" />
   </a>
   <a href="https://www.rust-lang.org/">
     <img src="https://img.shields.io/badge/Rust-1.75%2B-orange.svg" alt="Rust" />
@@ -107,16 +107,10 @@ The `.dmg` bundles the `homerund` daemon inside the app. Releases are automated 
 
 ### Install (macOS — Homebrew)
 
-```sh
-brew tap aGallea/homerun
-
-# CLI tools (homerun + homerund)
-brew install homerun
-
-# Desktop app (not code-signed — remove quarantine after install)
-brew install --cask homerun
-xattr -cr /Applications/HomeRun.app
-```
+Homebrew publication is optional and only runs when the repository variable
+`HOMEBREW_TAP_REPOSITORY` and the `TAP_GITHUB_TOKEN` secret are configured.
+Until a tap is listed in the release notes, install the signed release assets
+above instead of assuming an upstream or third-party tap.
 
 ### Install (Windows — MSI)
 
@@ -289,18 +283,18 @@ homerun --no-tui daemon autostart disable
 | Auth token storage | File-based (`~/.homerun/auth.json`)                                          |
 | Log streaming      | Server-Sent Events (SSE)                                                     |
 | Real-time updates  | WebSocket                                                                    |
-| Auto-start         | macOS launchd / Windows Registry Run; Linux manual                          |
-| Notifications      | Tauri notification plugin (macOS / Windows / Linux)                         |
+| Auto-start         | macOS launchd / Windows Registry Run; Linux manual                           |
+| Notifications      | Tauri notification plugin (macOS / Windows / Linux)                          |
 
 ## Roadmap
 
-| Feature                    | Description                                                               |
-| -------------------------- | ------------------------------------------------------------------------- |
-| Step-level live logs       | Capture every workflow step locally with lower-latency progress updates   |
-| Docker execution controls  | Resource limits and ephemeral container cleanup policies                  |
-| Kubernetes backend         | Manage runners as pods in a Kubernetes cluster                            |
-| Linux service integration  | Built-in systemd user-service installation and login startup              |
-| Organization-level runners | Manage runners at the GitHub organization level, not only per repository  |
+| Feature                    | Description                                                              |
+| -------------------------- | ------------------------------------------------------------------------ |
+| Step-level live logs       | Capture every workflow step locally with lower-latency progress updates  |
+| Docker execution controls  | Resource limits and ephemeral container cleanup policies                 |
+| Kubernetes backend         | Manage runners as pods in a Kubernetes cluster                           |
+| Linux service integration  | Built-in systemd user-service installation and login startup             |
+| Organization-level runners | Manage runners at the GitHub organization level, not only per repository |
 
 Priorities depend on user interest and verified platform demand.
 

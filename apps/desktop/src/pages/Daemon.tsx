@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router";
 import { useDaemonLogs } from "../hooks/useDaemonLogs";
 import { useMetrics } from "../hooks/useMetrics";
 import { api } from "../api/commands";

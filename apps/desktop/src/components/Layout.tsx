@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router";
 import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./Sidebar";
 import { api } from "../api/commands";

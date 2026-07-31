@@ -12,7 +12,7 @@ type DeviceFlowState =
   | { stage: "error"; message: string };
 
 export function Settings() {
-  const { auth, loading, loginWithToken, logout, refresh } = useAuth();
+  const { auth, loading, error: authError, loginWithToken, logout, refresh } = useAuth();
 
   // Device flow state
   const [deviceFlow, setDeviceFlow] = useState<DeviceFlowState>({ stage: "idle" });
@@ -45,6 +45,11 @@ export function Settings() {
 
   // Settings toggles
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
+  const [launchAtLoginSaving, setLaunchAtLoginSaving] = useState(false);
+  const [launchAtLoginError, setLaunchAtLoginError] = useState<string | null>(null);
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const [preferencesError, setPreferencesError] = useState<string | null>(null);
+  const [workspaceInput, setWorkspaceInput] = useState("");
   const [preferences, setPreferences] = useState<Preferences>({
     start_runners_on_launch: false,
     notify_status_changes: true,
@@ -58,11 +63,14 @@ export function Settings() {
   useEffect(() => {
     invoke<boolean>("service_status")
       .then(setLaunchAtLogin)
-      .catch(() => {});
+      .catch((error) => setLaunchAtLoginError(String(error)));
     api
       .getPreferences()
-      .then(setPreferences)
-      .catch(() => {});
+      .then((saved) => {
+        setPreferences(saved);
+        setWorkspaceInput(saved.workspace_path ?? "");
+      })
+      .catch((error) => setPreferencesError(String(error)));
   }, []);
 
   // Labels input local state (synced with preferences)
@@ -72,32 +80,31 @@ export function Settings() {
     setLabelsInput(preferences.scan_labels.join(", "));
   }, [preferences.scan_labels]);
 
+  async function persistPreferences(updated: Preferences) {
+    if (preferencesSaving) return;
+    const previous = preferences;
+    setPreferences(updated);
+    setPreferencesSaving(true);
+    setPreferencesError(null);
+    try {
+      const saved = await api.updatePreferences(updated);
+      setPreferences(saved);
+      setWorkspaceInput(saved.workspace_path ?? "");
+    } catch (error) {
+      setPreferences(previous);
+      setWorkspaceInput(previous.workspace_path ?? "");
+      setPreferencesError(String(error));
+    } finally {
+      setPreferencesSaving(false);
+    }
+  }
+
   function updatePreference(key: keyof Preferences, value: boolean) {
-    setPreferences((prev) => {
-      const updated = { ...prev, [key]: value };
-      api
-        .updatePreferences(updated)
-        .then(setPreferences)
-        .catch((e) => {
-          console.error("Failed to update preference:", e);
-          setPreferences(prev);
-        });
-      return updated;
-    });
+    void persistPreferences({ ...preferences, [key]: value });
   }
 
   function updatePreferences(updates: Partial<Preferences>) {
-    setPreferences((prev) => {
-      const updated = { ...prev, ...updates };
-      api
-        .updatePreferences(updated)
-        .then(setPreferences)
-        .catch((e) => {
-          console.error("Failed to update preference:", e);
-          setPreferences(prev);
-        });
-      return updated;
-    });
+    void persistPreferences({ ...preferences, ...updates });
   }
 
   const pollInBackground = useCallback(
@@ -161,9 +168,13 @@ export function Settings() {
   }
 
   async function handleLogout() {
-    await logout();
-    setTokenSuccess(false);
-    setDeviceFlow({ stage: "idle" });
+    try {
+      await logout();
+      setTokenSuccess(false);
+      setDeviceFlow({ stage: "idle" });
+    } catch (error) {
+      setTokenError(String(error));
+    }
   }
 
   return (
@@ -171,6 +182,12 @@ export function Settings() {
       <div className="page-header">
         <h1 className="page-title">Settings</h1>
       </div>
+
+      {(authError || preferencesError || launchAtLoginError) && (
+        <div className="error-banner" style={{ marginBottom: 16 }}>
+          {authError || preferencesError || launchAtLoginError}
+        </div>
+      )}
 
       {/* Auth section */}
       <section style={{ marginBottom: 32 }}>
@@ -513,16 +530,19 @@ export function Settings() {
             label="Launch at login"
             description="Automatically start the HomeRun daemon when you log in."
             checked={launchAtLogin}
+            disabled={launchAtLoginSaving}
             onChange={async (checked) => {
+              if (launchAtLoginSaving) return;
+              setLaunchAtLoginSaving(true);
+              setLaunchAtLoginError(null);
               try {
-                if (checked) {
-                  await invoke("install_service");
-                } else {
-                  await invoke("uninstall_service");
-                }
+                if (checked) await invoke("install_service");
+                else await invoke("uninstall_service");
                 setLaunchAtLogin(checked);
-              } catch (e) {
-                console.error("Failed to toggle launch at login:", e);
+              } catch (error) {
+                setLaunchAtLoginError(String(error));
+              } finally {
+                setLaunchAtLoginSaving(false);
               }
             }}
           />
@@ -531,6 +551,7 @@ export function Settings() {
             label="Restore runners on launch"
             description="Automatically start runners that were running when the daemon was last stopped."
             checked={preferences.start_runners_on_launch}
+            disabled={preferencesSaving}
             onChange={(checked) => updatePreference("start_runners_on_launch", checked)}
           />
         </div>
@@ -544,6 +565,7 @@ export function Settings() {
             label="Runner status changes"
             description="Notify when a runner goes online, offline, or encounters an error."
             checked={preferences.notify_status_changes}
+            disabled={preferencesSaving}
             onChange={(checked) => updatePreference("notify_status_changes", checked)}
           />
           <Divider />
@@ -551,6 +573,7 @@ export function Settings() {
             label="Job completions"
             description="Notify when a job completes or fails on a self-hosted runner."
             checked={preferences.notify_job_completions}
+            disabled={preferencesSaving}
             onChange={(checked) => updatePreference("notify_job_completions", checked)}
           />
         </div>
@@ -569,8 +592,13 @@ export function Settings() {
               </p>
               <input
                 type="text"
-                value={preferences.workspace_path ?? ""}
-                onChange={(e) => updatePreferences({ workspace_path: e.target.value || null })}
+                value={workspaceInput}
+                disabled={preferencesSaving}
+                onChange={(e) => setWorkspaceInput(e.target.value)}
+                onBlur={() => updatePreferences({ workspace_path: workspaceInput.trim() || null })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
                 placeholder="/path/to/workspace"
                 style={{ width: "100%", maxWidth: 400 }}
               />
@@ -600,6 +628,7 @@ export function Settings() {
               <input
                 type="text"
                 value={labelsInput}
+                disabled={preferencesSaving}
                 onChange={(e) => setLabelsInput(e.target.value)}
                 onBlur={() => {
                   const labels = labelsInput
@@ -639,6 +668,7 @@ export function Settings() {
             label="Auto-scan on page load"
             description="Automatically scan when opening the Repositories page."
             checked={preferences.auto_scan}
+            disabled={preferencesSaving}
             onChange={(checked) => updatePreferences({ auto_scan: checked })}
           />
         </div>
@@ -826,11 +856,13 @@ function ToggleSetting({
   label,
   description,
   checked,
+  disabled = false,
   onChange,
 }: {
   label: string;
   description: string;
   checked: boolean;
+  disabled?: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
@@ -841,21 +873,29 @@ function ToggleSetting({
           {description}
         </p>
       </div>
-      <div
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         style={{
           width: 40,
           height: 22,
+          padding: 0,
           background: checked ? "var(--accent-green)" : "var(--bg-tertiary)",
           border: `1px solid ${checked ? "var(--accent-green)" : "var(--border)"}`,
           borderRadius: 11,
-          cursor: "pointer",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.6 : 1,
           flexShrink: 0,
           position: "relative",
           transition: "background 0.2s, border-color 0.2s",
         }}
       >
-        <div
+        <span
+          aria-hidden="true"
           style={{
             width: 18,
             height: 18,
@@ -867,7 +907,7 @@ function ToggleSetting({
             transition: "left 0.2s, background 0.2s",
           }}
         />
-      </div>
+      </button>
     </div>
   );
 }

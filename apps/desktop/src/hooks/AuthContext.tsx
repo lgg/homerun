@@ -1,4 +1,12 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  type ReactNode,
+} from "react";
 import type { AuthStatus } from "../api/types";
 import { api } from "../api/commands";
 
@@ -22,16 +30,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const operationGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++operationGeneration.current;
     try {
-      setError(null);
       const status = await api.getAuthStatus();
+      if (generation !== operationGeneration.current) return;
+      setError(null);
       setAuth(status);
     } catch (e) {
-      setError(String(e));
+      if (generation === operationGeneration.current) setError(String(e));
     } finally {
-      setLoading(false);
+      if (generation === operationGeneration.current) setLoading(false);
     }
   }, []);
 
@@ -50,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setError(null);
       const status = await api.loginWithToken(token);
+      operationGeneration.current += 1;
       setAuth(status);
       return status;
     } catch (e) {
@@ -61,10 +73,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
+      setError(null);
       await api.logout();
+      operationGeneration.current += 1;
       setAuth({ authenticated: false, user: null });
     } catch (e) {
-      setError(String(e));
+      const message = String(e);
+      operationGeneration.current += 1;
+      setAuth({ authenticated: false, user: null });
+      setError(message);
+      throw new Error(message);
     }
   }, []);
 

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import type { RunnerInfo } from "../api/types";
 import { formatElapsed } from "../utils/formatElapsed";
 import { elapsedSeconds, jobProgress } from "../utils/runnerHelpers";
