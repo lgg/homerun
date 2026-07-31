@@ -131,3 +131,24 @@ jobs:
           fi
           git commit -m 'fix: finalize dependency and auto-scan audit'
           git push origin HEAD:audit/post-merge-runtime-consistency-2026-07-31
+
+  windows-verify:
+    if: github.head_ref == 'audit/post-merge-runtime-consistency-2026-07-31'
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-runtime-consistency-2026-07-31
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify Windows Rust workspace
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          .\target\release\homerun.exe --help
