@@ -1,0 +1,50 @@
+name: Post-merge Follow-up
+
+on:
+  push:
+    branches: [audit/post-merge-followup-2026-07-31]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-check:
+    if: ${{ !contains(github.event.head_commit.message, '[audit-applied]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-followup-2026-07-31
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Apply audited fixes
+        run: python3 .github/audit/apply_followup.py
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Verify frontend fixes
+        working-directory: apps/desktop
+        run: |
+          npm run test:coverage
+          npm exec -- tsc --noEmit
+          npm run build
+      - name: Verify source tree
+        run: |
+          git diff --check
+          test ! -e .github/audit/apply_followup.py
+      - name: Commit audited fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes were produced"
+            exit 1
+          fi
+          git commit -m "fix: close post-merge frontend races [audit-applied]"
+          git push origin HEAD:audit/post-merge-followup-2026-07-31
