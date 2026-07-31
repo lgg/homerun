@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   restart:
-    runs-on: self-hosted
+    runs-on: [self-hosted, homerun-ci]
     timeout-minutes: 5
     steps:
       - name: Restart only the Moira runner listener
