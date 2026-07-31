@@ -27,6 +27,8 @@ jobs:
         run: |
           git diff --check
           cargo fmt --all -- --check
+          test -z "$(git ls-files apps/desktop/coverage)"
+          test ! -e .github/audit/apply_followup.py
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
