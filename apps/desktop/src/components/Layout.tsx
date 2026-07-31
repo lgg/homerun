@@ -25,17 +25,27 @@ export function Layout() {
   useNotifications(runnersHook.runners, notifPrefs);
 
   useEffect(() => {
-    api
-      .getPreferences()
-      .then(setNotifPrefs)
-      .catch(() => {});
-    const interval = setInterval(() => {
-      api
-        .getPreferences()
-        .then(setNotifPrefs)
-        .catch(() => {});
-    }, 2000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const pollPreferences = async () => {
+      try {
+        const preferences = await api.getPreferences();
+        if (!cancelled) setNotifPrefs(preferences);
+      } catch {
+        // Keep the last known notification preferences while the daemon transitions.
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(() => void pollPreferences(), 2000);
+        }
+      }
+    };
+
+    void pollPreferences();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
 
   const handleStartDaemon = useCallback(async () => {

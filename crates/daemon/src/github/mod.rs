@@ -118,16 +118,12 @@ impl GitHubClient {
                 Err(_) => continue,
             };
 
-            let file_matched = labels
-                .iter()
-                .any(|label| content.contains(&format!("runs-on: {}", label)));
-            if file_matched {
+            let file_matches = crate::workflow::matching_runs_on_labels(&content, labels);
+            if !file_matches.is_empty() {
                 matching.push(format!(".github/workflows/{}", item.name));
-                for label in labels {
-                    if content.contains(&format!("runs-on: {}", label))
-                        && !matched_labels.contains(label)
-                    {
-                        matched_labels.push(label.clone());
+                for label in file_matches {
+                    if !matched_labels.contains(&label) {
+                        matched_labels.push(label);
                     }
                 }
             }
