@@ -1,4 +1,4 @@
-# Retry after isolating the generated-tree matcher.
+# Final trigger after making the recursion matcher indentation-safe.
 name: Apply declared features audit fixes
 
 on:
