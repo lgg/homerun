@@ -166,7 +166,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn atomic_write_applies_restrictive_mode_at_creation() {
-        use std::os:unix::fs::PermissionsExt;
+        use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("secret");
