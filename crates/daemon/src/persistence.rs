@@ -9,9 +9,6 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 fn temporary_path(path: &Path) -> Result<PathBuf> {
-    #[cfg(windows)]
-    let _ = unix_mode;
-
     let parent = path
         .parent()
         .context("Persistence path has no parent directory")?;
@@ -32,6 +29,9 @@ fn temporary_path(path: &Path) -> Result<PathBuf> {
 /// then replaces the destination atomically. Windows uses a rollback-safe
 /// backup because `rename` cannot replace an existing destination there.
 pub fn atomic_write(path: &Path, contents: &[u8], unix_mode: Option<u32>) -> Result<()> {
+    #[cfg(windows)]
+    let _ = unix_mode;
+
     let parent = path
         .parent()
         .context("Persistence path has no parent directory")?;
@@ -166,7 +166,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn atomic_write_applies_restrictive_mode_at_creation() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os:unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("secret");
