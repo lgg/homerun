@@ -1,0 +1,67 @@
+name: Restart stuck Moira runner
+
+on:
+  push:
+    paths:
+      - .github/workflows/restart-moira-runner.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restart:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Restart only the Moira runner listener
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = 'C:\Users\fgcod\.homerun\runners\411af2fb-cacf-4027-8366-889ad07cd502'
+          if (-not (Test-Path (Join-Path $target 'run.cmd'))) {
+            throw "Moira runner directory was not found: $target"
+          }
+
+          $targetLower = $target.ToLowerInvariant()
+          $listeners = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq 'Runner.Listener.exe' -and
+            $_.CommandLine -and
+            $_.CommandLine.ToLowerInvariant().Contains($targetLower)
+          }
+
+          foreach ($listener in $listeners) {
+            & taskkill.exe /PID $listener.ProcessId /T /F
+          }
+          Start-Sleep -Seconds 5
+
+          $remaining = Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -eq 'Runner.Listener.exe' -and
+            $_.CommandLine -and
+            $_.CommandLine.ToLowerInvariant().Contains($targetLower)
+          }
+          if (-not $remaining) {
+            $previousTrackingId = $env:RUNNER_TRACKING_ID
+            $env:RUNNER_TRACKING_ID = ''
+            Start-Process -FilePath (Join-Path $target 'run.cmd') -WorkingDirectory $target -WindowStyle Hidden
+            $env:RUNNER_TRACKING_ID = $previousTrackingId
+          }
+
+          $started = $false
+          for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+            Start-Sleep -Seconds 2
+            $active = Get-CimInstance Win32_Process | Where-Object {
+              $_.Name -eq 'Runner.Listener.exe' -and
+              $_.CommandLine -and
+              $_.CommandLine.ToLowerInvariant().Contains($targetLower)
+            }
+            if ($active) {
+              $started = $true
+              break
+            }
+          }
+          if (-not $started) {
+            throw 'Moira runner listener did not restart.'
+          }
+
+          Write-Host 'Moira runner listener restarted successfully.'
