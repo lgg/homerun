@@ -1,4 +1,4 @@
-# Retry after aligning the scanner matcher with the actual source.
+# Retry after isolating the generated-tree matcher.
 name: Apply declared features audit fixes
 
 on:
