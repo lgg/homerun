@@ -47,14 +47,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleUnauthorized = useCallback(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   useEffect(() => {
-    refresh();
-    // Poll auth status to stay in sync with daemon (e.g. after daemon restart)
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      await refresh();
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 5000);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      operationGeneration.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [refresh]);
 
   const loginWithToken = useCallback(async (token: string) => {

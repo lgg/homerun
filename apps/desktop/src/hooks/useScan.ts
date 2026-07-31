@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type Event } from "@tauri-apps/api/event";
 import type { DiscoveredRepo, ScanProgressEvent } from "../api/types";
 import { api } from "../api/commands";
 
@@ -17,13 +17,41 @@ export function useScan() {
   const activeScanIds = useRef(new Set<string>());
   const expectedScanIds = useRef(new Set<string>());
   const terminalScanIds = useRef(new Set<string>());
+  const earlyTerminalEvents = useRef(new Map<string, ScanProgressEvent>());
   const launchPending = useRef(false);
   const scanningRef = useRef(false);
   const cancelRequested = useRef(false);
+  const progressUnlisten = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
+
+  const releaseProgressListener = useCallback(() => {
+    const unlisten = progressUnlisten.current;
+    progressUnlisten.current = null;
+    unlisten?.();
+  }, []);
+
+  const appendFailure = useCallback((data: ScanProgressEvent) => {
+    if (!mounted.current) return;
+    const message = data.message ?? "Unknown scan error";
+    setScanError((current) =>
+      [current, `${data.scan_type} scan failed: ${message}`].filter(Boolean).join("\n"),
+    );
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      launchPending.current = false;
+      scanningRef.current = false;
+      earlyTerminalEvents.current.clear();
+      releaseProgressListener();
+    };
+  }, [releaseProgressListener]);
 
   const refreshResults = useCallback(async () => {
     const results = await api.getScanResults();
-    if (results) {
+    if (results && mounted.current) {
       setDiscoveredRepos(results.merged_results);
       setLastScanAt(results.last_scan_at);
     }
@@ -34,23 +62,27 @@ export function useScan() {
     try {
       await refreshResults();
     } catch (error) {
-      setScanError((current) => current ?? String(error));
+      if (mounted.current) setScanError((current) => current ?? String(error));
     } finally {
       scanningRef.current = false;
       cancelRequested.current = false;
       expectedScanIds.current.clear();
       terminalScanIds.current.clear();
-      setScanning(false);
-      setProgressText(null);
+      earlyTerminalEvents.current.clear();
+      releaseProgressListener();
+      if (mounted.current) {
+        setScanning(false);
+        setProgressText(null);
+      }
     }
-  }, [refreshResults]);
+  }, [refreshResults, releaseProgressListener]);
 
   useEffect(() => {
     refreshResults().catch(() => {});
   }, [refreshResults]);
 
-  useEffect(() => {
-    const unlisten = listen<string>("scan-progress", (event) => {
+  const handleProgress = useCallback(
+    (event: Event<string>) => {
       try {
         const data: ScanProgressEvent = JSON.parse(event.payload);
         if (!scanningRef.current) return;
@@ -59,26 +91,47 @@ export function useScan() {
           if (!launchPending.current && !expectedScanIds.current.has(data.scan_id)) return;
           if (terminalScanIds.current.has(data.scan_id)) return;
           activeScanIds.current.add(data.scan_id);
-          setProgressText(`Starting ${data.scan_type} scan (${data.total} repositories)...`);
+          if (mounted.current) {
+            setProgressText(
+              `Starting ${data.scan_type} scan (${data.total} repositories)...`,
+            );
+          }
           return;
         }
-        if (!activeScanIds.current.has(data.scan_id)) return;
+
+        if (!activeScanIds.current.has(data.scan_id)) {
+          const isTerminal =
+            data.type === "done" || data.type === "cancelled" || data.type === "failed";
+          if (launchPending.current && isTerminal) {
+            // The Tauri command spawns the SSE task before returning its IDs. A
+            // connection failure can therefore arrive without a preceding
+            // `started` event. Retain it until the returned ID set confirms it
+            // belongs to this launch rather than an older scan.
+            terminalScanIds.current.add(data.scan_id);
+            earlyTerminalEvents.current.set(data.scan_id, data);
+          }
+          return;
+        }
 
         switch (data.type) {
           case "checking":
-            setProgressText(
-              `Scanning ${data.repo} (${data.index}/${data.total}) via ${data.scan_type} discovery...`,
-            );
+            if (mounted.current) {
+              setProgressText(
+                `Scanning ${data.repo} (${data.index}/${data.total}) via ${data.scan_type} discovery...`,
+              );
+            }
             break;
           case "found":
-            setProgressText(`Found ${data.full_name}`);
+            if (mounted.current) setProgressText(`Found ${data.full_name}`);
             break;
           case "warning":
-            setScanError((current) =>
-              [current, `${data.repo ?? data.scan_type}: ${data.message}`]
-                .filter(Boolean)
-                .join("\n"),
-            );
+            if (mounted.current) {
+              setScanError((current) =>
+                [current, `${data.repo ?? data.scan_type}: ${data.message}`]
+                  .filter(Boolean)
+                  .join("\n"),
+              );
+            }
             break;
           case "done":
           case "cancelled":
@@ -89,23 +142,16 @@ export function useScan() {
           case "failed":
             terminalScanIds.current.add(data.scan_id);
             activeScanIds.current.delete(data.scan_id);
-            setScanError((current) =>
-              [current, `${data.scan_type} scan failed: ${data.message}`]
-                .filter(Boolean)
-                .join("\n"),
-            );
+            appendFailure(data);
             void finishIfIdle();
             break;
         }
       } catch {
         // Ignore malformed events from an incompatible/older daemon.
       }
-    });
-
-    return () => {
-      void unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [finishIfIdle]);
+    },
+    [appendFailure, finishIfIdle],
+  );
 
   const runScan = useCallback(
     async (options: ScanOptions) => {
@@ -120,6 +166,7 @@ export function useScan() {
       activeScanIds.current.clear();
       expectedScanIds.current.clear();
       terminalScanIds.current.clear();
+      earlyTerminalEvents.current.clear();
       cancelRequested.current = false;
       launchPending.current = true;
       scanningRef.current = true;
@@ -128,12 +175,38 @@ export function useScan() {
       setProgressText("Starting scan...");
 
       try {
+        // Install the event listener before asking the daemon to start. A very
+        // fast scan can otherwise emit its terminal event before the async
+        // Tauri subscription is ready, leaving the page stuck in scanning.
+        const unlisten = await listen<string>("scan-progress", handleProgress);
+        if (!mounted.current) {
+          unlisten();
+          return;
+        }
+        releaseProgressListener();
+        progressUnlisten.current = unlisten;
+
         const scanIds = await api.startScan(workspacePath, authenticated);
-        expectedScanIds.current = new Set(scanIds);
+        if (!mounted.current) {
+          await Promise.allSettled(scanIds.map((scanId) => api.cancelScan(scanId)));
+          releaseProgressListener();
+          return;
+        }
+
+        const returnedIds = new Set(scanIds);
+        expectedScanIds.current = returnedIds;
         activeScanIds.current = new Set(
           scanIds.filter((scanId) => !terminalScanIds.current.has(scanId)),
         );
         launchPending.current = false;
+
+        for (const [scanId, terminalEvent] of earlyTerminalEvents.current) {
+          if (returnedIds.has(scanId) && terminalEvent.type === "failed") {
+            appendFailure(terminalEvent);
+          }
+        }
+        earlyTerminalEvents.current.clear();
+
         if (cancelRequested.current) {
           setProgressText("Cancelling scan...");
           await Promise.allSettled(scanIds.map((scanId) => api.cancelScan(scanId)));
@@ -144,14 +217,18 @@ export function useScan() {
         activeScanIds.current.clear();
         expectedScanIds.current.clear();
         terminalScanIds.current.clear();
+        earlyTerminalEvents.current.clear();
         cancelRequested.current = false;
         scanningRef.current = false;
-        setScanError(String(error));
-        setScanning(false);
-        setProgressText(null);
+        releaseProgressListener();
+        if (mounted.current) {
+          setScanError(String(error));
+          setScanning(false);
+          setProgressText(null);
+        }
       }
     },
-    [finishIfIdle],
+    [appendFailure, finishIfIdle, handleProgress, releaseProgressListener],
   );
 
   const cancelScan = useCallback(async () => {

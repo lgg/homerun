@@ -17,7 +17,7 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
   const [loading, setLoading] = useState(false);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
   const [stepLogs, setStepLogs] = useState<Record<number, string[]>>({});
-  const logCacheRef = useRef<Record<number, string[]>>({});
+  const logCacheRef = useRef<Record<string, string[]>>({});
   const stepsGeneration = useRef(0);
   const logsGeneration = useRef(0);
 
@@ -58,18 +58,42 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
     };
   }, [isBusy, runnerId]);
 
-  const expandedStepStatus =
+  const expandedStepInfo =
     expandedStep === null
       ? null
-      : (stepsResponse?.steps.find((step) => step.number === expandedStep)?.status ?? null);
+      : (stepsResponse?.steps.find((step) => step.number === expandedStep) ?? null);
+  const expandedStepStatus = expandedStepInfo?.status ?? null;
+  const expandedStepCacheKey =
+    expandedStep === null || !runnerId || !expandedStepInfo
+      ? null
+      : JSON.stringify({
+          runnerId,
+          jobName: stepsResponse?.job_name ?? null,
+          number: expandedStepInfo.number,
+          name: expandedStepInfo.name,
+          startedAt: expandedStepInfo.started_at,
+          completedAt: expandedStepInfo.completed_at,
+        });
 
   useEffect(() => {
     const generation = ++logsGeneration.current;
     if (expandedStep === null || !runnerId) return;
 
-    const isRunning = expandedStepStatus === "running";
-    const isCached = logCacheRef.current[expandedStep] !== undefined;
-    if (isCached && !isRunning) return;
+    const isTerminal =
+      expandedStepStatus !== null &&
+      expandedStepStatus !== "pending" &&
+      expandedStepStatus !== "running";
+    const cachedLines =
+      expandedStepCacheKey === null ? undefined : logCacheRef.current[expandedStepCacheKey];
+    if (cachedLines !== undefined && isTerminal) {
+      setStepLogs((previous) => ({ ...previous, [expandedStep]: cachedLines }));
+      return;
+    }
+
+    // Do not display a previous job's step logs while the current identity is
+    // being resolved or fetched. Cache entries are scoped to a concrete job
+    // execution rather than only the step number.
+    setStepLogs((previous) => ({ ...previous, [expandedStep]: [] }));
 
     let cancelled = false;
     let timer: number | undefined;
@@ -78,18 +102,19 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
         const data = await api.getStepLogs(runnerId, expandedStep);
         if (cancelled || generation !== logsGeneration.current) return;
         const lines = data.lines;
-        if (!isRunning) logCacheRef.current[expandedStep] = lines;
+        // A null/pending status is not final. Caching at that point can freeze
+        // an early partial response and prevent the completed log from ever
+        // being fetched after the step transitions to a terminal state.
+        if (isTerminal && expandedStepCacheKey !== null) {
+          logCacheRef.current[expandedStepCacheKey] = lines;
+        }
         setStepLogs((previous) => ({ ...previous, [expandedStep]: lines }));
       } catch {
-        if (
-          !cancelled &&
-          generation === logsGeneration.current &&
-          !logCacheRef.current[expandedStep]
-        ) {
+        if (!cancelled && generation === logsGeneration.current && cachedLines === undefined) {
           setStepLogs((previous) => ({ ...previous, [expandedStep]: [] }));
         }
       } finally {
-        if (!cancelled && generation === logsGeneration.current && isRunning) {
+        if (!cancelled && generation === logsGeneration.current && !isTerminal) {
           timer = window.setTimeout(() => void fetchLogs(), 5000);
         }
       }
@@ -101,7 +126,7 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
       logsGeneration.current += 1;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [expandedStep, expandedStepStatus, runnerId]);
+  }, [expandedStep, expandedStepCacheKey, expandedStepStatus, runnerId]);
 
   const toggleStep = useCallback((stepNumber: number) => {
     setExpandedStep((previous) => (previous === stepNumber ? null : stepNumber));

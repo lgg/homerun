@@ -47,6 +47,7 @@ export function Settings() {
   const [launchAtLogin, setLaunchAtLogin] = useState(false);
   const [launchAtLoginSaving, setLaunchAtLoginSaving] = useState(false);
   const [launchAtLoginError, setLaunchAtLoginError] = useState<string | null>(null);
+  const [preferencesLoading, setPreferencesLoading] = useState(true);
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferencesError, setPreferencesError] = useState<string | null>(null);
   const [workspaceInput, setWorkspaceInput] = useState("");
@@ -70,7 +71,8 @@ export function Settings() {
         setPreferences(saved);
         setWorkspaceInput(saved.workspace_path ?? "");
       })
-      .catch((error) => setPreferencesError(String(error)));
+      .catch((error) => setPreferencesError(String(error)))
+      .finally(() => setPreferencesLoading(false));
   }, []);
 
   // Labels input local state (synced with preferences)
@@ -81,7 +83,7 @@ export function Settings() {
   }, [preferences.scan_labels]);
 
   async function persistPreferences(updated: Preferences) {
-    if (preferencesSaving) return;
+    if (preferencesLoading || preferencesSaving) return;
     const previous = preferences;
     setPreferences(updated);
     setPreferencesSaving(true);
@@ -551,7 +553,7 @@ export function Settings() {
             label="Restore runners on launch"
             description="Automatically start runners that were running when the daemon was last stopped."
             checked={preferences.start_runners_on_launch}
-            disabled={preferencesSaving}
+            disabled={preferencesLoading || preferencesSaving}
             onChange={(checked) => updatePreference("start_runners_on_launch", checked)}
           />
         </div>
@@ -565,7 +567,7 @@ export function Settings() {
             label="Runner status changes"
             description="Notify when a runner goes online, offline, or encounters an error."
             checked={preferences.notify_status_changes}
-            disabled={preferencesSaving}
+            disabled={preferencesLoading || preferencesSaving}
             onChange={(checked) => updatePreference("notify_status_changes", checked)}
           />
           <Divider />
@@ -573,7 +575,7 @@ export function Settings() {
             label="Job completions"
             description="Notify when a job completes or fails on a self-hosted runner."
             checked={preferences.notify_job_completions}
-            disabled={preferencesSaving}
+            disabled={preferencesLoading || preferencesSaving}
             onChange={(checked) => updatePreference("notify_job_completions", checked)}
           />
         </div>
@@ -593,7 +595,7 @@ export function Settings() {
               <input
                 type="text"
                 value={workspaceInput}
-                disabled={preferencesSaving}
+                disabled={preferencesLoading || preferencesSaving}
                 onChange={(e) => setWorkspaceInput(e.target.value)}
                 onBlur={() => updatePreferences({ workspace_path: workspaceInput.trim() || null })}
                 onKeyDown={(event) => {
@@ -628,7 +630,7 @@ export function Settings() {
               <input
                 type="text"
                 value={labelsInput}
-                disabled={preferencesSaving}
+                disabled={preferencesLoading || preferencesSaving}
                 onChange={(e) => setLabelsInput(e.target.value)}
                 onBlur={() => {
                   const labels = labelsInput
@@ -668,7 +670,7 @@ export function Settings() {
             label="Auto-scan on page load"
             description="Automatically scan when opening the Repositories page."
             checked={preferences.auto_scan}
-            disabled={preferencesSaving}
+            disabled={preferencesLoading || preferencesSaving}
             onChange={(checked) => updatePreferences({ auto_scan: checked })}
           />
         </div>

@@ -9,7 +9,6 @@ export function useDaemonLogs(pollInterval = 2000) {
   const [follow, setFollow] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const lastTimestampRef = useRef<string | null>(null);
   const refreshGeneration = useRef(0);
 
   const fetchLogs = useCallback(async () => {
@@ -18,9 +17,6 @@ export function useDaemonLogs(pollInterval = 2000) {
       const entries = await api.getDaemonLogsRecent(level, 2000, search || undefined);
       if (generation !== refreshGeneration.current) return;
       setLogs(entries);
-      if (entries.length > 0) {
-        lastTimestampRef.current = entries[entries.length - 1].timestamp;
-      }
       setError(null);
     } catch (e) {
       if (generation === refreshGeneration.current) setError(String(e));
@@ -30,9 +26,22 @@ export function useDaemonLogs(pollInterval = 2000) {
   }, [level, search]);
 
   useEffect(() => {
-    fetchLogs();
-    const interval = setInterval(fetchLogs, pollInterval);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      await fetchLogs();
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), pollInterval);
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      refreshGeneration.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [fetchLogs, pollInterval]);
 
   return {
