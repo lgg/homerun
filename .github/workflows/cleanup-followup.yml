@@ -1,0 +1,32 @@
+name: Cleanup Follow-up Artifacts
+
+on:
+  push:
+    branches: [audit/post-merge-followup-2026-07-31]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: ${{ !contains(github.event.head_commit.message, '[coverage-cleaned]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/post-merge-followup-2026-07-31
+          fetch-depth: 0
+      - name: Remove generated reports
+        run: rm -rf apps/desktop/coverage
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No generated coverage artifacts found"
+            exit 0
+          fi
+          git commit -m "chore: remove generated coverage artifacts [coverage-cleaned]"
+          git push origin HEAD:audit/post-merge-followup-2026-07-31
