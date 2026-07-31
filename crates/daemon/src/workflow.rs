@@ -59,7 +59,9 @@ pub fn matching_runs_on_labels(content: &str, labels: &[String]) -> Vec<String> 
         .collect();
     wanted
         .into_iter()
-        .filter_map(|(normalized, original)| candidate_set.contains(&normalized).then_some(original))
+        .filter_map(|(normalized, original)| {
+            candidate_set.contains(&normalized).then_some(original)
+        })
         .collect()
 }
 
@@ -120,7 +122,11 @@ mod tests {
     use super::*;
 
     fn labels() -> Vec<String> {
-        vec!["self-hosted".to_string(), "Linux".to_string(), "x64".to_string()]
+        vec![
+            "self-hosted".to_string(),
+            "Linux".to_string(),
+            "x64".to_string(),
+        ]
     }
 
     #[test]
@@ -152,7 +158,8 @@ mod tests {
 
     #[test]
     fn ignores_comments_substrings_and_expressions() {
-        let workflow = "# runs-on: self-hosted\nruns-on: custom-self-hosted-pool\nother: self-hosted\n";
+        let workflow =
+            "# runs-on: self-hosted\nruns-on: custom-self-hosted-pool\nother: self-hosted\n";
         assert!(matching_runs_on_labels(workflow, &labels()).is_empty());
         assert!(matching_runs_on_labels("runs-on: ${{ matrix.runner }}\n", &labels()).is_empty());
     }
