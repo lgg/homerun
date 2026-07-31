@@ -37,19 +37,30 @@ export function useRepos(enabled = true) {
   }, [enabled, handleUnauthorized]);
 
   useEffect(() => {
+    refreshGeneration.current += 1;
     if (!enabled) {
-      refreshGeneration.current += 1;
       setRepos([]);
       setError(null);
       setLoading(false);
       return;
     }
+
+    let cancelled = false;
+    let timer: number | undefined;
     setLoading(true);
-    void refresh();
-    const interval = setInterval(refresh, 5000);
+
+    const poll = async () => {
+      await refresh();
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 5000);
+      }
+    };
+
+    void poll();
     return () => {
-      clearInterval(interval);
+      cancelled = true;
       refreshGeneration.current += 1;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [enabled, refresh]);
 

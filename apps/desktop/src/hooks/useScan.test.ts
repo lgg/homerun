@@ -4,10 +4,17 @@ import type { Event } from "@tauri-apps/api/event";
 import { useScan } from "./useScan";
 
 let progressListener: ((event: Event<string>) => void) | undefined;
+let delayListener = false;
+let resolveListener: (() => void) | undefined;
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockImplementation((_name: string, listener: (event: Event<string>) => void) => {
     progressListener = listener;
+    if (delayListener) {
+      return new Promise<() => void>((resolve) => {
+        resolveListener = () => resolve(() => {});
+      });
+    }
     return Promise.resolve(() => {});
   }),
 }));
@@ -32,6 +39,8 @@ describe("useScan", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     progressListener = undefined;
+    delayListener = false;
+    resolveListener = undefined;
     mockedApi.startScan.mockResolvedValue(["local-1", "remote-1"]);
     mockedApi.getScanResults.mockResolvedValue(null);
   });
@@ -68,6 +77,27 @@ describe("useScan", () => {
 
     expect(result.current.discoveredRepos).toHaveLength(1);
     expect(result.current.lastScanAt).toBe("2026-03-28T13:00:00Z");
+  });
+
+  it("waits for the progress listener before starting a daemon scan", async () => {
+    delayListener = true;
+    const { result, unmount } = renderHook(() => useScan());
+    let runPromise!: Promise<void>;
+
+    await act(async () => {
+      runPromise = result.current.runScan({ workspacePath: "/workspace", authenticated: true });
+      await Promise.resolve();
+    });
+
+    expect(mockedApi.startScan).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveListener?.();
+      await runPromise;
+    });
+
+    expect(mockedApi.startScan).toHaveBeenCalledTimes(1);
+    unmount();
   });
 
   it("tracks exact scan IDs and finishes only after every source is terminal", async () => {

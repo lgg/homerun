@@ -67,9 +67,12 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
     const generation = ++logsGeneration.current;
     if (expandedStep === null || !runnerId) return;
 
-    const isRunning = expandedStepStatus === "running";
+    const isTerminal =
+      expandedStepStatus !== null &&
+      expandedStepStatus !== "pending" &&
+      expandedStepStatus !== "running";
     const isCached = logCacheRef.current[expandedStep] !== undefined;
-    if (isCached && !isRunning) return;
+    if (isCached && isTerminal) return;
 
     let cancelled = false;
     let timer: number | undefined;
@@ -78,7 +81,10 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
         const data = await api.getStepLogs(runnerId, expandedStep);
         if (cancelled || generation !== logsGeneration.current) return;
         const lines = data.lines;
-        if (!isRunning) logCacheRef.current[expandedStep] = lines;
+        // A null/pending status is not final. Caching at that point can freeze
+        // an early partial response and prevent the completed log from ever
+        // being fetched after the step transitions to a terminal state.
+        if (isTerminal) logCacheRef.current[expandedStep] = lines;
         setStepLogs((previous) => ({ ...previous, [expandedStep]: lines }));
       } catch {
         if (
@@ -89,7 +95,7 @@ export function useJobSteps(runnerId: string | undefined, isBusy: boolean): UseJ
           setStepLogs((previous) => ({ ...previous, [expandedStep]: [] }));
         }
       } finally {
-        if (!cancelled && generation === logsGeneration.current && isRunning) {
+        if (!cancelled && generation === logsGeneration.current && !isTerminal) {
           timer = window.setTimeout(() => void fetchLogs(), 5000);
         }
       }
