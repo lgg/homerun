@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StepsResponse } from "../api/types";
 import { useJobSteps } from "./useJobSteps";
 
 vi.mock("../api/commands", () => ({
@@ -59,7 +60,7 @@ describe("useJobSteps", () => {
 
   it("does not reuse terminal logs for the same step number in a later job", async () => {
     vi.useFakeTimers();
-    const firstJob = {
+    const firstJob: StepsResponse = {
       job_name: "CI",
       steps_discovered: 1,
       steps: [
@@ -72,7 +73,7 @@ describe("useJobSteps", () => {
         },
       ],
     };
-    const secondJob = {
+    const secondJob: StepsResponse = {
       ...firstJob,
       steps: [
         {
