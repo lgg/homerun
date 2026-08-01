@@ -177,7 +177,9 @@ async fn collect_workflow_files(
             if workflows_dir.is_dir() {
                 // The repo root is the parent of .github
                 if let Some(repo_root) = path.parent() {
-                    process_workflows_dir(repo_root, &workflows_dir, labels, found).await;
+                    if repo_root.join(".git").exists() {
+                        process_workflows_dir(repo_root, &workflows_dir, labels, found).await;
+                    }
                 }
             }
             // Don't recurse into .github itself
@@ -308,6 +310,9 @@ async fn discover_repos_recursive(
             let workflows_dir = path.join("workflows");
             if workflows_dir.is_dir() {
                 if let Some(repo_root) = path.parent() {
+                    if !repo_root.join(".git").exists() {
+                        continue;
+                    }
                     let full_name = git_remote_full_name(repo_root).await.unwrap_or_else(|| {
                         repo_root
                             .file_name()
@@ -470,22 +475,26 @@ async fn git_remote_full_name(repo_root: &Path) -> Option<String> {
 /// - `git@github.com:owner/repo.git`
 /// - `https://github.com/owner/repo`
 fn parse_github_full_name(url: &str) -> Option<String> {
-    // SSH: git@github.com:owner/repo.git
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        let name = rest.trim_end_matches(".git");
-        return Some(name.to_string());
-    }
-
-    // HTTPS: https://github.com/owner/repo[.git]
-    if let Some(rest) = url
+    let candidate = if let Some(rest) = url.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = url
         .strip_prefix("https://github.com/")
         .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
     {
-        let name = rest.trim_end_matches(".git");
-        return Some(name.to_string());
-    }
+        rest
+    } else {
+        return None;
+    };
 
-    None
+    let candidate = candidate.trim().trim_end_matches('/').trim_end_matches(".git");
+    let mut parts = candidate.split('/');
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,4 +1059,35 @@ mod tests {
         assert!(results.cancelled);
         assert_eq!(results.checked, 0);
     }
+
+    #[tokio::test]
+    async fn test_local_scan_ignores_non_git_workflow_trees() {
+        let tmp = TempDir::new().unwrap();
+        let fake_repo = tmp.path().join("generated-copy");
+        write_workflow(
+            &fake_repo,
+            "ci.yml",
+            "jobs:\n  build:\n    runs-on: self-hosted\n",
+        );
+
+        let results = scan_local(tmp.path(), &["self-hosted".to_string()])
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_github_url_requires_exact_owner_and_repo() {
+        assert_eq!(
+            parse_github_full_name("ssh://git@github.com/owner/repo.git"),
+            Some("owner/repo".to_string())
+        );
+        assert_eq!(parse_github_full_name("https://github.com/owner"), None);
+        assert_eq!(
+            parse_github_full_name("https://github.com/owner/repo/extra"),
+            None
+        );
+        assert_eq!(parse_github_full_name("https://gitlab.com/owner/repo"), None);
+    }
+
 }

@@ -54,7 +54,7 @@ HomeRun runs on **macOS**, **Windows**, and **Linux**. Login startup is built in
 - **Live log streaming** — tail runner output in real time from the runner detail view
 - **Job tracking** — current job progress with step-by-step status, estimated completion, and full job history per runner
 - **Runner metrics** — CPU/RAM polling with WebSocket lifecycle events for immediate dashboard refresh
-- **Two run modes** — app-managed (daemon child) or background service (launchd)
+- **Three execution modes** — app-managed, persistent native (reattached after daemon crashes), or Docker container
 - **Auto-restart** — crashed runners recover automatically (up to 3 attempts)
 - **Smart repo discovery** — scan local workspace directories or your GitHub account for repos that use self-hosted runners
 - **Terminal UI** — k9s-inspired TUI with info header, context-sensitive keybindings (F1-F4 tabs), repo search, and in-app login via Device Flow
@@ -109,8 +109,8 @@ The `.dmg` bundles the `homerund` daemon inside the app. Releases are automated 
 
 Homebrew publication is optional and only runs when the repository variable
 `HOMEBREW_TAP_REPOSITORY` and the `TAP_GITHUB_TOKEN` secret are configured.
-Until a tap is listed in the release notes, install the signed release assets
-above instead of assuming an upstream or third-party tap.
+Until a tap is listed in the release notes, install the release assets above
+instead of assuming an upstream or third-party tap.
 
 ### Install (Windows — MSI)
 

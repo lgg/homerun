@@ -67,6 +67,15 @@ pub struct LogEntry {
 
 const RECENT_LOGS_MAX: usize = 500;
 
+fn should_apply_job_context(
+    state: &RunnerState,
+    current_job: Option<&str>,
+    has_context: bool,
+    expected_job: &str,
+) -> bool {
+    *state == RunnerState::Busy && current_job == Some(expected_job) && !has_context
+}
+
 /// Handle for communicating with a runner's monitoring task.
 /// The monitoring task owns the `Child` exclusively — no shared lock needed.
 #[derive(Clone)]
@@ -264,15 +273,30 @@ impl RunnerManager {
                         .await
                     {
                         Ok(Some(ctx)) => {
-                            tracing::info!(
-                                runner = %runner_id,
-                                branch = %ctx.branch,
-                                pr = ?ctx.pr_number,
-                                "Job context fetched"
-                            );
                             let mut map = runners.write().await;
-                            if let Some(r) = map.get_mut(&runner_id) {
-                                r.job_context = Some(ctx);
+                            if let Some(runner) = map.get_mut(&runner_id) {
+                                if should_apply_job_context(
+                                    &runner.state,
+                                    runner.current_job.as_deref(),
+                                    runner.job_context.is_some(),
+                                    &job_name,
+                                ) {
+                                    tracing::info!(
+                                        runner = %runner_id,
+                                        branch = %ctx.branch,
+                                        pr = ?ctx.pr_number,
+                                        "Job context fetched"
+                                    );
+                                    runner.job_context = Some(ctx);
+                                } else {
+                                    tracing::debug!(
+                                        runner = %runner_id,
+                                        expected_job = %job_name,
+                                        current_job = ?runner.current_job,
+                                        state = ?runner.state,
+                                        "Discarding stale job context result"
+                                    );
+                                }
                             }
                         }
                         Ok(None) => {
@@ -5670,4 +5694,33 @@ name"
             "unexpected: {err}"
         );
     }
+
+    #[test]
+    fn test_job_context_compare_and_set_rejects_stale_results() {
+        assert!(should_apply_job_context(
+            &RunnerState::Busy,
+            Some("build"),
+            false,
+            "build"
+        ));
+        assert!(!should_apply_job_context(
+            &RunnerState::Online,
+            None,
+            false,
+            "build"
+        ));
+        assert!(!should_apply_job_context(
+            &RunnerState::Busy,
+            Some("test"),
+            false,
+            "build"
+        ));
+        assert!(!should_apply_job_context(
+            &RunnerState::Busy,
+            Some("build"),
+            true,
+            "build"
+        ));
+    }
+
 }

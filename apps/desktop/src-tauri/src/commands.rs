@@ -8,6 +8,45 @@ use crate::client::{
 };
 use crate::AppState;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownErrorDisposition {
+    ServiceManaged,
+    AlreadyStopped,
+    Fatal,
+}
+
+fn classify_shutdown_error(message: &str, daemon_healthy: bool) -> ShutdownErrorDisposition {
+    if message.contains("launchd")
+        || message.contains("Uninstall the service")
+        || message.contains("auto-start service")
+        || message.contains("system service")
+    {
+        ShutdownErrorDisposition::ServiceManaged
+    } else if daemon_healthy {
+        ShutdownErrorDisposition::Fatal
+    } else {
+        ShutdownErrorDisposition::AlreadyStopped
+    }
+}
+
+async fn daemon_is_healthy(client: &crate::client::DaemonClient) -> bool {
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), client.health()).await,
+        Ok(Ok(_))
+    )
+}
+
+fn remove_stale_socket(client: &crate::client::DaemonClient) {
+    #[cfg(unix)]
+    {
+        let _ = std::fs::remove_file(client.socket_path());
+    }
+    #[cfg(windows)]
+    {
+        let _ = client;
+    }
+}
+
 #[tauri::command]
 pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> {
     use std::time::Duration;
@@ -58,43 +97,43 @@ pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> 
 async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, String> {
     let active_runners = match client.shutdown().await {
         Ok(count) => count,
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("launchd") || msg.contains("Uninstall the service") {
-                // Uninstall the platform startup service, then retry shutdown
-                let retry_client = client.clone_connection();
-                retry_client
-                    .uninstall_service()
-                    .await
-                    .map_err(|e| format!("Failed to uninstall daemon startup service: {e}"))?;
-                // Retry shutdown after uninstalling service
-                match retry_client.shutdown().await {
-                    Ok(count) => count,
-                    Err(e2) => {
-                        #[cfg(unix)]
-                        {
-                            let _ = std::fs::remove_file(client.socket_path());
-                        }
-                        let msg2 = e2.to_string();
-                        if !msg2.contains("connect") {
+        Err(error) => {
+            let message = error.to_string();
+            let healthy = daemon_is_healthy(&client).await;
+            match classify_shutdown_error(&message, healthy) {
+                ShutdownErrorDisposition::ServiceManaged => {
+                    let retry_client = client.clone_connection();
+                    retry_client.uninstall_service().await.map_err(|error| {
+                        format!("Failed to uninstall daemon startup service: {error}")
+                    })?;
+                    match retry_client.shutdown().await {
+                        Ok(count) => count,
+                        Err(retry_error) => {
+                            let retry_message = retry_error.to_string();
+                            let retry_healthy = daemon_is_healthy(&retry_client).await;
+                            if classify_shutdown_error(&retry_message, retry_healthy)
+                                == ShutdownErrorDisposition::AlreadyStopped
+                            {
+                                remove_stale_socket(&retry_client);
+                                return Ok(true);
+                            }
                             return Err(format!(
-                                "Failed to stop daemon after uninstalling service: {msg2}"
+                                "Failed to stop daemon after uninstalling startup service: {retry_message}"
                             ));
                         }
-                        0
                     }
                 }
-            } else {
-                // Already down — clean up stale socket
-                #[cfg(unix)]
-                {
-                    let _ = std::fs::remove_file(client.socket_path());
+                ShutdownErrorDisposition::AlreadyStopped => {
+                    remove_stale_socket(&client);
+                    return Ok(true);
                 }
-                return Ok(true);
+                ShutdownErrorDisposition::Fatal => {
+                    return Err(format!("Failed to stop daemon: {message}"));
+                }
             }
         }
     };
-    // Scale timeout: 5s base + 15s if there are active runners (stopped concurrently)
+
     let timeout_secs: u64 = 5 + if active_runners > 0 { 15 } else { 0 };
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
@@ -102,7 +141,11 @@ async fn do_stop_daemon(client: crate::client::DaemonClient) -> Result<bool, Str
             return Ok(true);
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("Daemon did not shut down in time".to_string());
+            if daemon_is_healthy(&client).await {
+                return Err("Daemon did not shut down in time and is still responding".to_string());
+            }
+            remove_stale_socket(&client);
+            return Ok(true);
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
@@ -120,7 +163,7 @@ pub async fn restart_daemon(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let client = state.client.lock().await.clone_connection();
-    let _ = do_stop_daemon(client).await;
+    do_stop_daemon(client).await?;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     start_daemon(app_handle).await
 }
@@ -592,4 +635,26 @@ pub fn send_notification(
         .body(body)
         .show()
         .map_err(|e| format!("Failed to send notification: {e}"))
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_errors_only_count_as_stopped_when_health_is_gone() {
+        assert_eq!(
+            classify_shutdown_error("connection refused", false),
+            ShutdownErrorDisposition::AlreadyStopped
+        );
+        assert_eq!(
+            classify_shutdown_error("temporary transport failure", true),
+            ShutdownErrorDisposition::Fatal
+        );
+        assert_eq!(
+            classify_shutdown_error("Uninstall the service first", true),
+            ShutdownErrorDisposition::ServiceManaged
+        );
+    }
+}
+
 }

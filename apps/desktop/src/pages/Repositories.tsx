@@ -7,6 +7,7 @@ import type { Preferences, DiscoveredRepo, RepoInfo } from "../api/types";
 import { useAuth } from "../hooks/useAuth";
 import { NewRunnerWizard } from "../components/NewRunnerWizard";
 import { api } from "../api/commands";
+import { isLaunchableRepository } from "../utils/repository";
 
 export function Repositories() {
   const { auth, loading: authLoading } = useAuth();
@@ -360,6 +361,7 @@ export function Repositories() {
             const count = runnerCountByRepo.get(repo.full_name) ?? 0;
             const discovered = discoveryMap.get(repo.full_name);
             const isDimmed = hasScanned && showEnriched && !discovered;
+            const canCreateRunner = isLaunchableRepository(repo.full_name);
             return (
               <div
                 key={repo.id || repo.full_name}
@@ -496,16 +498,26 @@ export function Repositories() {
                   <button
                     className="btn btn-primary"
                     style={{ fontSize: 12, padding: "4px 12px" }}
+                    disabled={auth.authenticated && !canCreateRunner}
+                    title={
+                      auth.authenticated && !canCreateRunner
+                        ? "Add a GitHub remote in owner/repository form before creating a runner"
+                        : undefined
+                    }
                     onClick={() => {
-                      if (auth.authenticated) {
+                      if (auth.authenticated && canCreateRunner) {
                         setWizardRepo(repo);
                         setWizardOpen(true);
-                      } else {
+                      } else if (!auth.authenticated) {
                         navigate("/settings");
                       }
                     }}
                   >
-                    {auth.authenticated ? "+ Add Runner" : "Sign in to add"}
+                    {auth.authenticated
+                      ? canCreateRunner
+                        ? "+ Add Runner"
+                        : "GitHub remote required"
+                      : "Sign in to add"}
                   </button>
                 </div>
               </div>

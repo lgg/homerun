@@ -639,7 +639,7 @@ function StepConfigure({
                   {m === "app"
                     ? "Runs as a foreground process. Stops with daemon."
                     : m === "service"
-                      ? "Runs as a background service. Survives restarts."
+                      ? "Runs persistently and can be reattached after daemon crashes."
                       : disabled
                         ? "Docker isn't reachable right now."
                         : "Runs inside a Docker container for isolation."}

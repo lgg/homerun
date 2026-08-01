@@ -108,10 +108,7 @@ export function Settings() {
         setPreferencesError(null);
       }
       try {
-        while (
-          settingsMountedRef.current &&
-          desiredPreferencesRef.current !== persistedPreferencesRef.current
-        ) {
+        while (desiredPreferencesRef.current !== persistedPreferencesRef.current) {
           const version = preferenceVersionRef.current;
           const snapshot = desiredPreferencesRef.current;
           const saved = await api.updatePreferences(snapshot);
@@ -119,8 +116,10 @@ export function Settings() {
 
           if (version === preferenceVersionRef.current) {
             desiredPreferencesRef.current = saved;
-            setPreferences(saved);
-            setWorkspaceInput(saved.workspace_path ?? "");
+            if (settingsMountedRef.current) {
+              setPreferences(saved);
+              setWorkspaceInput(saved.workspace_path ?? "");
+            }
           }
         }
       } catch (error) {

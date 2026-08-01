@@ -8,6 +8,27 @@ use anyhow::{bail, Context, Result};
 
 use crate::client::DaemonClient;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownErrorDisposition {
+    ServiceManaged,
+    AlreadyStopped,
+    Fatal,
+}
+
+fn classify_shutdown_error(message: &str, daemon_healthy: bool) -> ShutdownErrorDisposition {
+    if message.contains("launchd")
+        || message.contains("Uninstall the service")
+        || message.contains("auto-start service")
+        || message.contains("system service")
+    {
+        ShutdownErrorDisposition::ServiceManaged
+    } else if daemon_healthy {
+        ShutdownErrorDisposition::Fatal
+    } else {
+        ShutdownErrorDisposition::AlreadyStopped
+    }
+}
+
 #[cfg(unix)]
 fn default_socket_path() -> PathBuf {
     dirs::home_dir()
@@ -100,56 +121,61 @@ pub async fn stop_daemon() -> Result<()> {
 
     let active_runners = match client.shutdown().await {
         Ok(count) => count,
-        Err(e) => {
-            let msg = format!("{e}");
-            #[cfg(unix)]
-            if msg.contains("launchd") || msg.contains("Uninstall the service") {
-                bail!(
-                    "Daemon is managed by launchd. Uninstall the service first \
-                     (Settings > Startup) or run: launchctl unload ~/Library/LaunchAgents/com.homerun.daemon.plist"
-                );
+        Err(error) => {
+            let message = error.to_string();
+            let healthy = client.health().await.is_ok();
+            match classify_shutdown_error(&message, healthy) {
+                ShutdownErrorDisposition::ServiceManaged => {
+                    #[cfg(target_os = "macos")]
+                    bail!(
+                        "Daemon is managed by launchd. Disable Launch at login first \
+                         (Settings > Startup) or run: launchctl unload ~/Library/LaunchAgents/com.homerun.daemon.plist"
+                    );
+                    #[cfg(windows)]
+                    bail!(
+                        "Daemon is managed by Windows autostart. Disable Launch at login first \
+                         (Settings > Startup)."
+                    );
+                    #[cfg(all(unix, not(target_os = "macos")))]
+                    bail!(
+                        "Daemon is managed by a system service. Disable that service before stopping it directly."
+                    );
+                }
+                ShutdownErrorDisposition::AlreadyStopped => {
+                    #[cfg(unix)]
+                    if socket.exists() {
+                        std::fs::remove_file(&socket)?;
+                    }
+                    return Ok(());
+                }
+                ShutdownErrorDisposition::Fatal => {
+                    bail!("Failed to stop daemon: {message}");
+                }
             }
-            #[cfg(windows)]
-            if msg.contains("Uninstall the service") {
-                bail!(
-                    "Daemon is managed as a Windows service. Uninstall the service first \
-                     (Settings > Startup) or use: sc delete homerun-daemon"
-                );
-            }
-            #[cfg(unix)]
-            if socket.exists() {
-                std::fs::remove_file(&socket)?;
-            }
-            return Ok(());
         }
     };
 
-    // Scale timeout: 5s base + 15s per active runner (each runner may take up to 15s to stop).
-    // Runners are stopped concurrently, so we use a single 15s window, not N * 15s.
     let timeout_secs = 5 + if active_runners > 0 { 15 } else { 0 };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
     loop {
         #[cfg(unix)]
-        {
-            if !socket.exists() {
-                return Ok(());
-            }
+        if !socket.exists() {
+            return Ok(());
         }
         #[cfg(windows)]
-        {
-            // On Windows, check if the pipe is no longer reachable.
-            if tokio::net::windows::named_pipe::ClientOptions::new()
-                .open(default_pipe_name())
-                .is_err()
-            {
-                return Ok(());
-            }
+        if !is_daemon_running().await {
+            return Ok(());
         }
+
         if tokio::time::Instant::now() >= deadline {
+            let healthy = client.health().await.is_ok();
+            if healthy {
+                bail!("Daemon did not shut down in time and is still responding");
+            }
             #[cfg(unix)]
             if socket.exists() {
-                let _ = std::fs::remove_file(&socket);
+                std::fs::remove_file(&socket)?;
             }
             return Ok(());
         }
@@ -158,7 +184,36 @@ pub async fn stop_daemon() -> Result<()> {
 }
 
 pub async fn restart_daemon() -> Result<()> {
-    let _ = stop_daemon().await;
+    #[cfg(unix)]
+    if is_daemon_running(&default_socket_path()).await {
+        stop_daemon().await?;
+    }
+    #[cfg(windows)]
+    if is_daemon_running().await {
+        stop_daemon().await?;
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
     start_daemon().await
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_error_classification_is_fail_closed() {
+        assert_eq!(
+            classify_shutdown_error("connection refused", false),
+            ShutdownErrorDisposition::AlreadyStopped
+        );
+        assert_eq!(
+            classify_shutdown_error("transport reset", true),
+            ShutdownErrorDisposition::Fatal
+        );
+        assert_eq!(
+            classify_shutdown_error("Daemon is installed as a system service", true),
+            ShutdownErrorDisposition::ServiceManaged
+        );
+    }
+}
+
 }
