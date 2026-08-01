@@ -1,9 +1,9 @@
 name: Apply final declared-surfaces audit
 
 on:
-  push:
-    branches:
-      - audit/final-declared-surfaces-2026-08-01
+  pull_request:
+    branches: [master]
+    types: [opened, reopened]
 
 permissions:
   contents: write
@@ -12,7 +12,8 @@ jobs:
   apply:
     if: >-
       github.repository == 'lgg/homerun' &&
-      github.ref == 'refs/heads/audit/final-declared-surfaces-2026-08-01'
+      github.head_ref == 'audit/final-declared-surfaces-2026-08-01' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -47,5 +48,5 @@ jobs:
             crates/tui/src/daemon_lifecycle.rs
           git diff --cached --check
           test -z "$(git diff --cached --name-only | grep -E '^\.github/(audit|workflows)/' || true)"
-          git commit -m "fix: harden remaining declared lifecycle flows"
+          git commit -m "fix: harden remaining declared lifecycle flows [skip ci]"
           git push origin HEAD:audit/final-declared-surfaces-2026-08-01
