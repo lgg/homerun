@@ -1067,7 +1067,7 @@ mod tests {
     async fn test_local_scan_ignores_non_git_workflow_trees() {
         let tmp = TempDir::new().unwrap();
         let fake_repo = tmp.path().join("generated-copy");
-        write_workflow(
+        create_workflow(
             &fake_repo,
             "ci.yml",
             "jobs:\n  build:\n    runs-on: self-hosted\n",
