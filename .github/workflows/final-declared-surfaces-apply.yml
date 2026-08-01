@@ -3,7 +3,7 @@ name: Apply final declared-surfaces audit
 on:
   pull_request:
     branches: [master]
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: write
