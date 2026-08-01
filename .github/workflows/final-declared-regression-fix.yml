@@ -1,34 +1,82 @@
-name: Apply final audit regression fix
+name: Final declared-surfaces verification
 
 on:
   pull_request:
     branches: [master]
-    types: [opened, reopened]
+    types: [reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  ubuntu-verify:
     if: >-
-      github.repository == 'lgg/homerun' &&
+      github.event.pull_request.number == 20 &&
       github.head_ref == 'audit/final-declared-surfaces-2026-08-01' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          ref: audit/final-declared-surfaces-2026-08-01
-          fetch-depth: 0
-      - name: Apply brace fix
-        run: python3 .github/audit/apply_final_declared_surfaces.py
-      - name: Commit corrected product files
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Install Tauri Linux dependencies
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm .github/audit/apply_final_declared_surfaces.py
-          git add apps/desktop/src-tauri/src/commands.rs crates/tui/src/daemon_lifecycle.rs
-          git diff --cached --check
-          git commit -m "fix: correct audit regression placement [skip ci]"
-          git push origin HEAD:audit/final-declared-surfaces-2026-08-01
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Verify clean committed tree
+        run: |
+          git diff --check
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          test -z "$(git ls-files apps/desktop/coverage)"
+          test ! -e .github/audit/apply_final_declared_surfaces.py
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Verify frontend
+        working-directory: apps/desktop
+        run: |
+          npm run test:coverage
+          npm exec -- tsc --noEmit
+          npm run build
+      - name: Verify core Rust workspace
+        run: |
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          ./target/release/homerun --help
+      - name: Verify Tauri crate
+        run: |
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+  windows-verify:
+    if: >-
+      github.event.pull_request.number == 20 &&
+      github.head_ref == 'audit/final-declared-surfaces-2026-08-01' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify Windows core and Tauri crates
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+          cargo test --workspace --all-targets
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo build --release -p homerun -p homerund
+          .\target\release\homerun.exe --help
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
