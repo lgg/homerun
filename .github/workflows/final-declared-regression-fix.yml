@@ -6,9 +6,250 @@ on:
     types: [reopened, synchronize]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
+  repair-pr20:
+    if: >-
+      github.event.pull_request.number == 20 &&
+      github.head_ref == 'audit/final-declared-surfaces-2026-08-01' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/final-declared-surfaces-2026-08-01
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply audited source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f .github/workflows/apply-job-context-generation-fix.yml ]]; then
+            echo "Repair helper already consumed; verification-only run."
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/daemon/src/runner/mod.rs')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''fn should_apply_job_context(
+              state: &RunnerState,
+              current_job: Option<&str>,
+              has_context: bool,
+              expected_job: &str,
+          ) -> bool {
+              *state == RunnerState::Busy && current_job == Some(expected_job) && !has_context
+          }''',
+                  '''fn should_apply_job_context(
+              state: &RunnerState,
+              current_job: Option<&str>,
+              current_job_started_at: Option<&chrono::DateTime<chrono::Utc>>,
+              has_context: bool,
+              expected_job: &str,
+              expected_job_started_at_micros: i64,
+          ) -> bool {
+              *state == RunnerState::Busy
+                  && current_job == Some(expected_job)
+                  && current_job_started_at.map(|started_at| started_at.timestamp_micros())
+                      == Some(expected_job_started_at_micros)
+                  && !has_context
+          }'''
+              ),
+              (
+                  'let needs_context: Vec<(String, String, String, String, String)> = {',
+                  'let needs_context: Vec<(String, String, String, String, String, i64)> = {'
+              ),
+              (
+                  '''                            r.state == RunnerState::Busy
+                                  && r.job_context.is_none()
+                                  && r.current_job.is_some()''',
+                  '''                            r.state == RunnerState::Busy
+                                  && r.job_context.is_none()
+                                  && r.current_job.is_some()
+                                  && r.job_started_at.is_some()'''
+              ),
+              (
+                  '''                                r.config.repo_name.clone(),
+                                  r.current_job.clone().unwrap(),
+                              )''',
+                  '''                                r.config.repo_name.clone(),
+                                  r.current_job.clone().unwrap(),
+                                  r.job_started_at
+                                      .as_ref()
+                                      .expect("filtered job start timestamp")
+                                      .timestamp_micros(),
+                              )'''
+              ),
+              (
+                  'for (runner_id, runner_name, owner, repo, job_name) in needs_context {',
+                  'for (runner_id, runner_name, owner, repo, job_name, job_started_at_micros) in needs_context {'
+              ),
+              (
+                  '''                                    &runner.state,
+                                      runner.current_job.as_deref(),
+                                      runner.job_context.is_some(),
+                                      &job_name,
+                                  )''',
+                  '''                                    &runner.state,
+                                      runner.current_job.as_deref(),
+                                      runner.job_started_at.as_ref(),
+                                      runner.job_context.is_some(),
+                                      &job_name,
+                                      job_started_at_micros,
+                                  )'''
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one match, found {count}: {old[:80]!r}')
+              text = text.replace(old, new)
+
+          old_test = '''    #[test]
+              fn test_job_context_compare_and_set_rejects_stale_results() {
+                  assert!(should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("build"),
+                      false,
+                      "build"
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Online,
+                      None,
+                      false,
+                      "build"
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("test"),
+                      false,
+                      "build"
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("build"),
+                      true,
+                      "build"
+                  ));
+              }'''
+          new_test = '''    #[test]
+              fn test_job_context_compare_and_set_rejects_stale_results() {
+                  let started_at = chrono::Utc::now();
+                  let stale_started_at = started_at - chrono::Duration::seconds(1);
+                  let expected_micros = started_at.timestamp_micros();
+
+                  assert!(should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("build"),
+                      Some(&started_at),
+                      false,
+                      "build",
+                      expected_micros,
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Online,
+                      None,
+                      None,
+                      false,
+                      "build",
+                      expected_micros,
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("test"),
+                      Some(&started_at),
+                      false,
+                      "build",
+                      expected_micros,
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("build"),
+                      Some(&stale_started_at),
+                      false,
+                      "build",
+                      expected_micros,
+                  ));
+                  assert!(!should_apply_job_context(
+                      &RunnerState::Busy,
+                      Some("build"),
+                      Some(&started_at),
+                      true,
+                      "build",
+                      expected_micros,
+                  ));
+              }'''
+          if text.count(old_test) != 1:
+              raise SystemExit('expected one job-context regression test block')
+          path.write_text(text.replace(old_test, new_test))
+          PY
+          cargo fmt --all
+      - name: Apply machine-safe Clippy repairs
+        if: hashFiles('.github/workflows/apply-job-context-generation-fix.yml') != ''
+        shell: bash
+        run: cargo clippy --fix --workspace --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
+      - name: Validate repaired source strictly
+        if: hashFiles('.github/workflows/apply-job-context-generation-fix.yml') != ''
+        id: strict
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cargo fmt --all -- --check
+          fmt_status=$?
+          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
+          clippy_status=${PIPESTATUS[0]}
+          cargo test --workspace --all-targets 2>&1 | tee tests.log
+          test_status=${PIPESTATUS[0]}
+          if [[ $fmt_status -ne 0 || $clippy_status -ne 0 || $test_status -ne 0 ]]; then
+            {
+              echo '### Automated repair diagnostic'
+              echo
+              echo "- rustfmt exit: $fmt_status"
+              echo "- clippy exit: $clippy_status"
+              echo "- tests exit: $test_status"
+              echo
+              echo '<details><summary>Clippy tail</summary>'
+              echo
+              echo '```text'
+              tail -n 160 clippy.log
+              echo '```'
+              echo '</details>'
+              echo
+              echo '<details><summary>Test tail</summary>'
+              echo
+              echo '```text'
+              tail -n 80 tests.log
+              echo '```'
+              echo '</details>'
+            } > diagnostic.md
+            gh pr comment 20 --body-file diagnostic.md
+            exit 1
+          fi
+      - name: Commit repair and consume helper
+        if: hashFiles('.github/workflows/apply-job-context-generation-fix.yml') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/apply-job-context-generation-fix.yml
+          git add crates/daemon/src/runner/mod.rs
+          git diff --cached --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "fix: bind job context to the active job generation"
+          git push origin HEAD:audit/final-declared-surfaces-2026-08-01
+
   ubuntu-verify:
     if: >-
       github.event.pull_request.number == 20 &&
