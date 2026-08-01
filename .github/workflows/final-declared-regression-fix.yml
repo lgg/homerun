@@ -30,32 +30,44 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - name: Verify clean committed tree
+      - name: Check patch whitespace
+        run: git diff --check
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+      - name: Check Tauri formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+      - name: Check repository hygiene
         run: |
-          git diff --check
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
           test -z "$(git ls-files apps/desktop/coverage)"
           test ! -e .github/audit/apply_final_declared_surfaces.py
+          test ! -e .github/audit
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci
-      - name: Verify frontend
+      - name: Audit frontend dependencies
         working-directory: apps/desktop
-        run: |
-          npm run test:coverage
-          npm exec -- tsc --noEmit
-          npm run build
-      - name: Verify core Rust workspace
-        run: |
-          cargo test --workspace --all-targets
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo build --release -p homerun -p homerund
-          ./target/release/homerun --help
-      - name: Verify Tauri crate
-        run: |
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
-          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: npm audit --audit-level=high
+      - name: Test frontend with coverage
+        working-directory: apps/desktop
+        run: npm run test:coverage
+      - name: Type-check frontend
+        working-directory: apps/desktop
+        run: npm exec -- tsc --noEmit
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
+      - name: Test core Rust workspace
+        run: cargo test --workspace --all-targets
+      - name: Lint core Rust workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build release binaries
+        run: cargo build --release -p homerun -p homerund
+      - name: Smoke-test CLI
+        run: ./target/release/homerun --help
+      - name: Test Tauri crate
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+      - name: Lint Tauri crate
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
   windows-verify:
     if: >-
@@ -69,14 +81,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Verify Windows core and Tauri crates
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+      - name: Check Tauri formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+      - name: Test core Rust workspace
+        run: cargo test --workspace --all-targets
+      - name: Lint core Rust workspace
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build release binaries
+        run: cargo build --release -p homerun -p homerund
+      - name: Smoke-test CLI
         shell: pwsh
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
-          cargo test --workspace --all-targets
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo build --release -p homerun -p homerund
-          .\target\release\homerun.exe --help
-          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
-          cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: .\target\release\homerun.exe --help
+      - name: Test Tauri crate
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+      - name: Lint Tauri crate
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
