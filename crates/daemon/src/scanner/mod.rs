@@ -487,7 +487,10 @@ fn parse_github_full_name(url: &str) -> Option<String> {
         return None;
     };
 
-    let candidate = candidate.trim().trim_end_matches('/').trim_end_matches(".git");
+    let candidate = candidate
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
     let mut parts = candidate.split('/');
     let owner = parts.next()?;
     let repo = parts.next()?;
@@ -1087,7 +1090,9 @@ mod tests {
             parse_github_full_name("https://github.com/owner/repo/extra"),
             None
         );
-        assert_eq!(parse_github_full_name("https://gitlab.com/owner/repo"), None);
+        assert_eq!(
+            parse_github_full_name("https://gitlab.com/owner/repo"),
+            None
+        );
     }
-
 }
