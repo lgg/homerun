@@ -7,6 +7,8 @@ describe("isLaunchableRepository", () => {
     expect(isLaunchableRepository("repo")).toBe(false);
     expect(isLaunchableRepository("owner/")).toBe(false);
     expect(isLaunchableRepository("/repo")).toBe(false);
+    expect(isLaunchableRepository(" owner/repo")).toBe(false);
+    expect(isLaunchableRepository("owner/repo ")).toBe(false);
     expect(isLaunchableRepository("owner/repo/extra")).toBe(false);
   });
 });
