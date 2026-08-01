@@ -3,7 +3,7 @@ name: Apply final audit regression fix
 on:
   pull_request:
     branches: [master]
-    types: [reopened]
+    types: [opened]
 
 permissions:
   contents: write
