@@ -3,7 +3,7 @@ name: Final declared-surfaces verification
 on:
   pull_request:
     branches: [master]
-    types: [reopened]
+    types: [reopened, synchronize]
 
 permissions:
   contents: read
