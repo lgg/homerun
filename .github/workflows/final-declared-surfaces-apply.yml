@@ -27,8 +27,8 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm .github/audit/apply_final_declared_surfaces.py
-          git rm .github/workflows/final-declared-surfaces-apply.yml
+          git rm -f --ignore-unmatch .github/audit/apply_final_declared_surfaces.py
+          git rm -f --ignore-unmatch .github/workflows/final-declared-surfaces-apply.yml
           git add \
             README.md \
             Cargo.toml \
@@ -47,5 +47,5 @@ jobs:
             crates/tui/src/cli.rs \
             crates/tui/src/daemon_lifecycle.rs
           git diff --cached --check
-          git commit -m "fix: harden remaining declared lifecycle flows [skip ci]"
+          git commit -m "fix: correct audit regression placement [skip ci]"
           git push origin HEAD:audit/final-declared-surfaces-2026-08-01
