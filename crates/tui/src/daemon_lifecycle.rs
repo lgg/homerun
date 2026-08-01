@@ -194,6 +194,7 @@ pub async fn restart_daemon() -> Result<()> {
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
     start_daemon().await
+}
 
 #[cfg(test)]
 mod tests {
@@ -214,6 +215,4 @@ mod tests {
             ShutdownErrorDisposition::ServiceManaged
         );
     }
-}
-
 }

@@ -635,6 +635,7 @@ pub fn send_notification(
         .body(body)
         .show()
         .map_err(|e| format!("Failed to send notification: {e}"))
+}
 
 #[cfg(test)]
 mod tests {
@@ -655,6 +656,4 @@ mod tests {
             ShutdownErrorDisposition::ServiceManaged
         );
     }
-}
-
 }
