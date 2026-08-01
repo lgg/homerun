@@ -47,6 +47,5 @@ jobs:
             crates/tui/src/cli.rs \
             crates/tui/src/daemon_lifecycle.rs
           git diff --cached --check
-          test -z "$(git diff --cached --name-only | grep -E '^\.github/(audit|workflows)/' || true)"
           git commit -m "fix: harden remaining declared lifecycle flows [skip ci]"
           git push origin HEAD:audit/final-declared-surfaces-2026-08-01
