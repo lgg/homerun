@@ -9,8 +9,11 @@ describe("isLaunchableRepository", () => {
     expect(isLaunchableRepository("/repo")).toBe(false);
     expect(isLaunchableRepository(" owner/repo")).toBe(false);
     expect(isLaunchableRepository("owner/repo ")).toBe(false);
+    expect(isLaunchableRepository("own er/repo")).toBe(false);
+    expect(isLaunchableRepository("owner/re po")).toBe(false);
     expect(isLaunchableRepository("owner\t/repo")).toBe(false);
     expect(isLaunchableRepository("owner\n/repo")).toBe(false);
+    expect(isLaunchableRepository("owner\r/repo")).toBe(false);
     expect(isLaunchableRepository("owner//repo")).toBe(false);
     expect(isLaunchableRepository("owner/repo/extra")).toBe(false);
   });
