@@ -28,16 +28,8 @@ jobs:
           from pathlib import Path
           path = Path('crates/daemon/src/scanner/mod.rs')
           text = path.read_text(encoding='utf-8')
-          old = '''        write_workflow(
-              &fake_repo,
-              "ci.yml",
-              "jobs:\\n  build:\\n    runs-on: self-hosted\\n",
-          );'''
-          new = '''        create_workflow(
-              &fake_repo,
-              "ci.yml",
-              "jobs:\\n  build:\\n    runs-on: self-hosted\\n",
-          );'''
+          old = '        write_workflow(\n'
+          new = '        create_workflow(\n'
           if text.count(old) != 1:
               raise SystemExit(f'expected one helper reference, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
