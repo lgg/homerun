@@ -195,3 +195,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix: bind job context to the active job generation"
           git push origin HEAD:audit/final-declared-surfaces-2026-08-01
+
+# Synchronize PR after the authoritative repair gate was installed on master.
