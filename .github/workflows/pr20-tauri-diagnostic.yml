@@ -1,0 +1,45 @@
+name: PR 20 Tauri diagnostic
+
+on:
+  pull_request:
+    branches: [master]
+    types: [synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    if: >-
+      github.event.pull_request.number == 20 &&
+      github.head_ref == 'audit/final-declared-surfaces-2026-08-01' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Run Tauri tests and report exact failure
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- --nocapture 2>&1 | tee tauri-tests.log
+          status=${PIPESTATUS[0]}
+          if [[ $status -ne 0 ]]; then
+            {
+              echo '### Tauri test diagnostic'
+              echo
+              echo '```text'
+              tail -n 220 tauri-tests.log
+              echo '```'
+            } > diagnostic.md
+            gh pr comment 20 --body-file diagnostic.md
+          fi
+          exit $status
