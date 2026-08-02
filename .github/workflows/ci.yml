@@ -11,11 +11,10 @@ permissions:
   pull-requests: write
 
 # A single project-specific runner executes every HomeRun maintenance workflow.
-# Keep every pending run queued instead of replacing older work when new events arrive.
+# Keep pending runs queued instead of cancelling older work when new events arrive.
 concurrency:
   group: homerun-ci-${{ github.repository }}
   cancel-in-progress: false
-  queue: max
 
 env:
   CARGO_TERM_COLOR: always
@@ -106,6 +105,16 @@ jobs:
       - name: Run TUI tests with coverage
         run: cargo llvm-cov -p homerun --all-features --lcov --output-path tui-lcov.info
 
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
+
+      - name: Test Tauri crate
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+
+      - name: Lint Tauri crate
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
       - name: Merge coverage reports
         run: |
           sed 's|^SF:src/|SF:apps/desktop/src/|' apps/desktop/coverage/lcov.info > react-lcov-fixed.info
@@ -124,6 +133,9 @@ jobs:
           min-coverage-percentage: "80"
           fail-under-coverage-percentage: "false"
 
-      - name: Clean Rust build artifacts
+      - name: Clean generated artifacts
         if: always()
-        run: cargo clean
+        run: |
+          cargo clean
+          cargo clean --manifest-path apps/desktop/src-tauri/Cargo.toml
+          rm -rf apps/desktop/src-tauri/binaries
