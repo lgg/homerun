@@ -1,4 +1,4 @@
-name: Apply job-context generation fix
+name: Finalize PR 20 audit repairs
 
 on:
   push:
@@ -9,34 +9,48 @@ permissions:
   contents: write
 
 jobs:
-  apply:
+  repair-and-verify:
     if: github.repository == 'lgg/homerun'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
           ref: audit/final-declared-surfaces-2026-08-01
           fetch-depth: 0
-      - name: Apply generation-safe job context guard
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply audited source repairs
+        shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          path = Path('crates/daemon/src/runner/mod.rs')
-          text = path.read_text()
+          def replace_once(text: str, pattern: str, replacement: str, label: str, *, flags: int = 0) -> str:
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return updated
 
-          replacements = [
-              (
-                  '''fn should_apply_job_context(
-              state: &RunnerState,
-              current_job: Option<&str>,
-              has_context: bool,
-              expected_job: &str,
-          ) -> bool {
-              *state == RunnerState::Busy && current_job == Some(expected_job) && !has_context
-          }''',
-                  '''fn should_apply_job_context(
+          runner_path = Path("crates/daemon/src/runner/mod.rs")
+          runner = runner_path.read_text()
+
+          runner = replace_once(
+              runner,
+              r'''fn should_apply_job_context\(
+\s*state: &RunnerState,
+\s*current_job: Option<&str>,
+\s*has_context: bool,
+\s*expected_job: &str,
+\) -> bool \{
+\s*\*state == RunnerState::Busy && current_job == Some\(expected_job\) && !has_context
+\}''',
+              '''fn should_apply_job_context(
               state: &RunnerState,
               current_job: Option<&str>,
               current_job_started_at: Option<&chrono::DateTime<chrono::Utc>>,
@@ -49,86 +63,85 @@ jobs:
                   && current_job_started_at.map(|started_at| started_at.timestamp_micros())
                       == Some(expected_job_started_at_micros)
                   && !has_context
-          }'''
-              ),
-              (
-                  'let needs_context: Vec<(String, String, String, String, String)> = {',
-                  'let needs_context: Vec<(String, String, String, String, String, i64)> = {'
-              ),
-              (
-                  '''                            r.state == RunnerState::Busy
-                                  && r.job_context.is_none()
-                                  && r.current_job.is_some()''',
-                  '''                            r.state == RunnerState::Busy
+          }''',
+              "job-context guard",
+          )
+
+          old_tuple = "let needs_context: Vec<(String, String, String, String, String)> = {"
+          new_tuple = "let needs_context: Vec<(String, String, String, String, String, i64)> = {"
+          if runner.count(old_tuple) != 1:
+              raise SystemExit(f"needs-context tuple: expected one match, found {runner.count(old_tuple)}")
+          runner = runner.replace(old_tuple, new_tuple, 1)
+
+          runner = replace_once(
+              runner,
+              r'''r\.state == RunnerState::Busy
+\s*&& r\.job_context\.is_none\(\)
+\s*&& r\.current_job\.is_some\(\)''',
+              '''r.state == RunnerState::Busy
                                   && r.job_context.is_none()
                                   && r.current_job.is_some()
-                                  && r.job_started_at.is_some()'''
-              ),
-              (
-                  '''                                r.config.repo_name.clone(),
-                                  r.current_job.clone().unwrap(),
-                              )''',
-                  '''                                r.config.repo_name.clone(),
+                                  && r.job_started_at.is_some()''',
+              "job-context candidate filter",
+          )
+
+          runner = replace_once(
+              runner,
+              r'''r\.config\.repo_name\.clone\(\),
+\s*r\.current_job\.clone\(\)\.unwrap\(\),
+\s*\)''',
+              '''r.config.repo_name.clone(),
                                   r.current_job.clone().unwrap(),
                                   r.job_started_at
                                       .as_ref()
                                       .expect("filtered job start timestamp")
                                       .timestamp_micros(),
-                              )'''
-              ),
-              (
-                  'for (runner_id, runner_name, owner, repo, job_name) in needs_context {',
-                  'for (runner_id, runner_name, owner, repo, job_name, job_started_at_micros) in needs_context {'
-              ),
-              (
-                  '''                                    &runner.state,
-                                      runner.current_job.as_deref(),
-                                      runner.job_context.is_some(),
-                                      &job_name,
-                                  )''',
-                  '''                                    &runner.state,
+                              )''',
+              "job-context candidate generation",
+          )
+
+          old_loop = "for (runner_id, runner_name, owner, repo, job_name) in needs_context {"
+          new_loop = "for (runner_id, runner_name, owner, repo, job_name, job_started_at_micros) in needs_context {"
+          if runner.count(old_loop) != 1:
+              raise SystemExit(f"job-context loop: expected one match, found {runner.count(old_loop)}")
+          runner = runner.replace(old_loop, new_loop, 1)
+
+          runner = replace_once(
+              runner,
+              r'''&runner\.state,
+\s*runner\.current_job\.as_deref\(\),
+\s*runner\.job_context\.is_some\(\),
+\s*&job_name,
+\s*\)''',
+              '''&runner.state,
                                       runner.current_job.as_deref(),
                                       runner.job_started_at.as_ref(),
                                       runner.job_context.is_some(),
                                       &job_name,
                                       job_started_at_micros,
-                                  )'''
-              ),
-          ]
+                                  )''',
+              "job-context compare-and-set call",
+          )
 
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected one match, found {count}: {old[:80]!r}')
-              text = text.replace(old, new)
+          marker = "    #[test]\n    fn test_job_context_compare_and_set_rejects_stale_results() {"
+          start = runner.find(marker)
+          if start == -1:
+              raise SystemExit("job-context regression test: start marker not found")
+          brace = runner.find("{", start)
+          depth = 0
+          end = None
+          for index in range(brace, len(runner)):
+              char = runner[index]
+              if char == "{":
+                  depth += 1
+              elif char == "}":
+                  depth -= 1
+                  if depth == 0:
+                      end = index + 1
+                      break
+          if end is None:
+              raise SystemExit("job-context regression test: closing brace not found")
 
-          old_test = '''    #[test]
-              fn test_job_context_compare_and_set_rejects_stale_results() {
-                  assert!(should_apply_job_context(
-                      &RunnerState::Busy,
-                      Some("build"),
-                      false,
-                      "build"
-                  ));
-                  assert!(!should_apply_job_context(
-                      &RunnerState::Online,
-                      None,
-                      false,
-                      "build"
-                  ));
-                  assert!(!should_apply_job_context(
-                      &RunnerState::Busy,
-                      Some("test"),
-                      false,
-                      "build"
-                  ));
-                  assert!(!should_apply_job_context(
-                      &RunnerState::Busy,
-                      Some("build"),
-                      true,
-                      "build"
-                  ));
-              }'''
           new_test = '''    #[test]
               fn test_job_context_compare_and_set_rejects_stale_results() {
                   let started_at = chrono::Utc::now();
@@ -176,24 +189,56 @@ jobs:
                       expected_micros,
                   ));
               }'''
-          if text.count(old_test) != 1:
-              raise SystemExit('expected one job-context regression test block')
-          text = text.replace(old_test, new_test)
-          path.write_text(text)
+          runner = runner[:start] + new_test + runner[end:]
+          runner_path.write_text(runner)
+
+          scanner_path = Path("crates/daemon/src/scanner/mod.rs")
+          scanner = scanner_path.read_text()
+          scanner = replace_once(
+              scanner,
+              r'''let candidate = if let Some\(rest\) = url\.strip_prefix\("git@github\.com:"\) \{
+\s*rest
+\s*\} else if let Some\(rest\) = url
+\s*\.strip_prefix\("https://github\.com/"\)
+\s*\.or_else\(\|\| url\.strip_prefix\("http://github\.com/"\)\)
+\s*\.or_else\(\|\| url\.strip_prefix\("ssh://git@github\.com/"\)\)
+\s*\{
+\s*rest
+\s*\} else \{
+\s*return None;
+\s*\};''',
+              '''let candidate = if let Some(rest) = url.strip_prefix("git@github.com:") {
+              rest
+          } else {
+              url.strip_prefix("https://github.com/")
+                  .or_else(|| url.strip_prefix("http://github.com/"))
+                  .or_else(|| url.strip_prefix("ssh://git@github.com/"))?
+          };''',
+              "GitHub remote parser",
+          )
+          scanner_path.write_text(scanner)
           PY
-      - name: Format and validate patch
+
+      - name: Format and validate repaired source
+        shell: bash
         run: |
+          set -euo pipefail
           cargo fmt --all
           git diff --check
           cargo test -p homerund test_job_context_compare_and_set_rejects_stale_results
-      - name: Commit product fix and remove helper
+          cargo test -p homerund test_parse_github_url_requires_exact_owner_and_repo
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Commit product repairs and consume helper
+        shell: bash
         run: |
+          set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git rm .github/workflows/apply-job-context-generation-fix.yml
-          git add crates/daemon/src/runner/mod.rs
+          git add crates/daemon/src/runner/mod.rs crates/daemon/src/scanner/mod.rs
           git diff --cached --check
-          git commit -m "fix: bind job context to the active job generation"
+          test -z "$(git diff --cached --name-only | grep -E '^\.github/workflows/' || true)" || \
+            test "$(git diff --cached --name-only | grep -E '^\.github/workflows/' | tr -d '\n')" = ".github/workflows/apply-job-context-generation-fix.yml"
+          git commit -m "fix: finish generation-safe audit repairs"
           git push origin HEAD:audit/final-declared-surfaces-2026-08-01
-
-# Synchronize PR after the authoritative repair gate was installed on master.
