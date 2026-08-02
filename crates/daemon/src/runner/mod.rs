@@ -70,10 +70,16 @@ const RECENT_LOGS_MAX: usize = 500;
 fn should_apply_job_context(
     state: &RunnerState,
     current_job: Option<&str>,
+    current_job_started_at: Option<&chrono::DateTime<chrono::Utc>>,
     has_context: bool,
     expected_job: &str,
+    expected_job_started_at_micros: i64,
 ) -> bool {
-    *state == RunnerState::Busy && current_job == Some(expected_job) && !has_context
+    *state == RunnerState::Busy
+        && current_job == Some(expected_job)
+        && current_job_started_at.map(|started_at| started_at.timestamp_micros())
+            == Some(expected_job_started_at_micros)
+        && !has_context
 }
 
 /// Handle for communicating with a runner's monitoring task.
@@ -232,13 +238,14 @@ impl RunnerManager {
                 interval.tick().await;
 
                 // Collect busy runners missing job_context
-                let needs_context: Vec<(String, String, String, String, String)> = {
+                let needs_context: Vec<(String, String, String, String, String, i64)> = {
                     let map = runners.read().await;
                     map.values()
                         .filter(|r| {
                             r.state == RunnerState::Busy
                                 && r.job_context.is_none()
                                 && r.current_job.is_some()
+                                && r.job_started_at.is_some()
                         })
                         .map(|r| {
                             (
@@ -247,6 +254,10 @@ impl RunnerManager {
                                 r.config.repo_owner.clone(),
                                 r.config.repo_name.clone(),
                                 r.current_job.clone().unwrap(),
+                                r.job_started_at
+                                    .as_ref()
+                                    .expect("filtered job start timestamp")
+                                    .timestamp_micros(),
                             )
                         })
                         .collect()
@@ -267,7 +278,9 @@ impl RunnerManager {
                     continue;
                 };
 
-                for (runner_id, runner_name, owner, repo, job_name) in needs_context {
+                for (runner_id, runner_name, owner, repo, job_name, job_started_at_micros) in
+                    needs_context
+                {
                     match gh
                         .get_active_run_for_runner(&owner, &repo, &runner_name, &job_name)
                         .await
@@ -278,8 +291,10 @@ impl RunnerManager {
                                 if should_apply_job_context(
                                     &runner.state,
                                     runner.current_job.as_deref(),
+                                    runner.job_started_at.as_ref(),
                                     runner.job_context.is_some(),
                                     &job_name,
+                                    job_started_at_micros,
                                 ) {
                                     tracing::info!(
                                         runner = %runner_id,
@@ -5697,29 +5712,49 @@ name"
 
     #[test]
     fn test_job_context_compare_and_set_rejects_stale_results() {
+        let started_at = chrono::Utc::now();
+        let stale_started_at = started_at - chrono::Duration::seconds(1);
+        let expected_micros = started_at.timestamp_micros();
+
         assert!(should_apply_job_context(
             &RunnerState::Busy,
             Some("build"),
+            Some(&started_at),
             false,
-            "build"
+            "build",
+            expected_micros,
         ));
         assert!(!should_apply_job_context(
             &RunnerState::Online,
             None,
+            None,
             false,
-            "build"
+            "build",
+            expected_micros,
         ));
         assert!(!should_apply_job_context(
             &RunnerState::Busy,
             Some("test"),
+            Some(&started_at),
             false,
-            "build"
+            "build",
+            expected_micros,
         ));
         assert!(!should_apply_job_context(
             &RunnerState::Busy,
             Some("build"),
+            Some(&stale_started_at),
+            false,
+            "build",
+            expected_micros,
+        ));
+        assert!(!should_apply_job_context(
+            &RunnerState::Busy,
+            Some("build"),
+            Some(&started_at),
             true,
-            "build"
+            "build",
+            expected_micros,
         ));
     }
 }
