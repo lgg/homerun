@@ -159,28 +159,23 @@ pub fn run() {
 
                 loop {
                     let client = crate::client::DaemonClient::default_socket();
-                    match client.connect_events().await {
-                        Ok(mut events) => {
-                            while let Some(message) = events.next().await {
-                                match message {
-                                    Ok(Message::Text(text)) => {
-                                        match serde_json::from_str::<serde_json::Value>(&text) {
-                                            Ok(event) => {
-                                                let _ = event_handle.emit("runner-event", event);
-                                            }
-                                            Err(error) => {
-                                                eprintln!(
-                                                    "Ignoring malformed daemon event: {error}"
-                                                );
-                                            }
+                    if let Ok(mut events) = client.connect_events().await {
+                        while let Some(message) = events.next().await {
+                            match message {
+                                Ok(Message::Text(text)) => {
+                                    match serde_json::from_str::<serde_json::Value>(&text) {
+                                        Ok(event) => {
+                                            let _ = event_handle.emit("runner-event", event);
+                                        }
+                                        Err(error) => {
+                                            eprintln!("Ignoring malformed daemon event: {error}");
                                         }
                                     }
-                                    Ok(Message::Close(_)) | Err(_) => break,
-                                    _ => {}
                                 }
+                                Ok(Message::Close(_)) | Err(_) => break,
+                                _ => {}
                             }
                         }
-                        Err(_) => {}
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
