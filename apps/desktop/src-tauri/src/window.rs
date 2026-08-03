@@ -136,7 +136,12 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), String> {
 /// `tray_center_x` is the horizontal center of the tray icon (physical pixels).
 /// `tray_top_y` is the top edge of the tray icon (physical pixels).
 /// `tray_bottom_y` is the bottom edge of the tray icon (physical pixels).
-pub fn toggle_tray_panel_window(app: &AppHandle, tray_center_x: i32, tray_top_y: i32, tray_bottom_y: i32) {
+pub fn toggle_tray_panel_window(
+    app: &AppHandle,
+    tray_center_x: i32,
+    tray_top_y: i32,
+    tray_bottom_y: i32,
+) {
     if let Some(win) = app.get_webview_window(TRAY_PANEL_LABEL) {
         if win.is_visible().unwrap_or(false) {
             let _ = win.hide();

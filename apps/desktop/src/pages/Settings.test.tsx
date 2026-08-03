@@ -89,6 +89,42 @@ describe("Settings", () => {
     );
   });
 
+  it("persists the newest queued snapshot after the screen unmounts", async () => {
+    let resolveFirst: ((value: Preferences) => void) | undefined;
+    mocks.updatePreferences
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockImplementation(async (value: Preferences) => value);
+
+    const view = render(<Settings />);
+    const restore = await screen.findByRole("switch", { name: "Restore runners on launch" });
+    const completions = screen.getByRole("switch", { name: "Job completions" });
+    await waitFor(() => expect(restore).not.toBeDisabled());
+
+    act(() => {
+      restore.click();
+      completions.click();
+    });
+    expect(mocks.updatePreferences).toHaveBeenCalledTimes(1);
+    view.unmount();
+
+    await act(async () => {
+      resolveFirst?.({ ...preferences, start_runners_on_launch: true });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(mocks.updatePreferences).toHaveBeenCalledTimes(2));
+    expect(mocks.updatePreferences).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        start_runners_on_launch: true,
+        notify_job_completions: false,
+      }),
+    );
+  });
+
   it("opens About links through the Tauri shell bridge", async () => {
     render(<Settings />);
     const repository = await screen.findByRole("link", { name: "Repository" });

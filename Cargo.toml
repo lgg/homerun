@@ -6,7 +6,7 @@ members = ["crates/daemon", "crates/tui", "crates/test-utils"]
 version = "0.9.1"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/aGallea/homerun"
+repository = "https://github.com/lgg/homerun"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

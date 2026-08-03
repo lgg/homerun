@@ -386,14 +386,35 @@ pub async fn cmd_list(client: &DaemonClient) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RunnerStateCounts {
+    online: usize,
+    busy: usize,
+    offline: usize,
+    error: usize,
+    transitioning: usize,
+}
+
+fn count_runner_states<'a>(states: impl IntoIterator<Item = &'a str>) -> RunnerStateCounts {
+    let mut counts = RunnerStateCounts::default();
+    for state in states {
+        match state {
+            "online" => counts.online += 1,
+            "busy" => counts.busy += 1,
+            "offline" => counts.offline += 1,
+            "error" => counts.error += 1,
+            _ => counts.transitioning += 1,
+        }
+    }
+    counts
+}
+
 pub async fn cmd_status(client: &DaemonClient, verbose: bool) -> Result<()> {
     let auth = client.auth_status().await?;
     let runners = client.list_runners().await?;
     let metrics = client.get_metrics().await.ok();
 
-    let online = runners.iter().filter(|r| r.state == "online").count();
-    let busy = runners.iter().filter(|r| r.state == "busy").count();
-    let offline = runners.iter().filter(|r| r.state == "offline").count();
+    let counts = count_runner_states(runners.iter().map(|runner| runner.state.as_str()));
 
     let user = auth
         .user
@@ -414,10 +435,12 @@ pub async fn cmd_status(client: &DaemonClient, verbose: bool) -> Result<()> {
 
     let total = runners.len();
     println!(
-        "  Runners: {total} total ({} online, {} busy, {} offline)",
-        colored(&online.to_string(), "32"),
-        colored(&busy.to_string(), "33"),
-        colored(&offline.to_string(), "90"),
+        "  Runners: {total} total ({} online, {} busy, {} offline, {} error, {} transitioning)",
+        colored(&counts.online.to_string(), "32"),
+        colored(&counts.busy.to_string(), "33"),
+        colored(&counts.offline.to_string(), "90"),
+        colored(&counts.error.to_string(), "31"),
+        colored(&counts.transitioning.to_string(), "36"),
     );
 
     if let Some(m) = &metrics {
@@ -564,5 +587,27 @@ mod tests {
     #[test]
     fn test_colored_with_terminal() {
         assert_eq!(colored_impl("hello", "32", true), "\x1b[32mhello\x1b[0m");
+    }
+
+    #[test]
+    fn test_count_runner_states_includes_errors_and_transitions() {
+        let counts = count_runner_states([
+            "online",
+            "busy",
+            "offline",
+            "error",
+            "registering",
+            "stopping",
+        ]);
+        assert_eq!(
+            counts,
+            RunnerStateCounts {
+                online: 1,
+                busy: 1,
+                offline: 1,
+                error: 1,
+                transitioning: 2,
+            }
+        );
     }
 }
