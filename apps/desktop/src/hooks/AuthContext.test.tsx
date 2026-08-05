@@ -25,9 +25,7 @@ describe("AuthProvider", () => {
 
   it("waits for a slow auth request before scheduling the next poll", async () => {
     vi.useFakeTimers();
-    let resolveFirst:
-      | ((value: Awaited<ReturnType<typeof api.getAuthStatus>>) => void)
-      | undefined;
+    let resolveFirst: ((value: Awaited<ReturnType<typeof api.getAuthStatus>>) => void) | undefined;
     mockedApi.getAuthStatus
       .mockReturnValueOnce(
         new Promise((resolve) => {

@@ -3,11 +3,11 @@ name: Coverage Badge
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 concurrency:
-  group: homerun-ci-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
+  group: homerun-coverage-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,27 +15,25 @@ env:
 jobs:
   update-badge:
     name: Update coverage badge
-    runs-on: [self-hosted, homerun-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
-    defaults:
-      run:
-        shell: bash
+    env:
+      GIST_SECRET: ${{ secrets.GIST_SECRET }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify preinstalled toolchain
-        run: |
-          set -euo pipefail
-          for tool in git node npm rustc cargo curl awk sed grep; do
-            command -v "$tool" >/dev/null 2>&1 || {
-              echo "::error::$tool is not installed on the homerun-ci runner"
-              exit 1
-            }
-          done
-          cargo llvm-cov --version >/dev/null 2>&1 || {
-            echo "::error::cargo-llvm-cov is not installed on the homerun-ci runner"
-            exit 1
-          }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install locked frontend dependencies
         working-directory: apps/desktop
@@ -48,9 +46,8 @@ jobs:
       - name: Run Rust tests with coverage
         run: cargo llvm-cov -p homerund -p homerun --all-features --summary-only 2>&1 | tee coverage-summary.txt
 
-      - name: Update badge
-        env:
-          GIST_SECRET: ${{ secrets.GIST_SECRET }}
+      - name: Parse line coverage
+        id: coverage
         run: |
           set -euo pipefail
           COVERAGE=$(grep "^TOTAL" coverage-summary.txt | grep -oE '[0-9]+\.[0-9]+%' | sed -n '3p' | sed 's/%//')
@@ -59,10 +56,14 @@ jobs:
             cat coverage-summary.txt
             exit 1
           fi
-          if [[ -z "${GIST_SECRET:-}" ]]; then
-            echo "::error::GIST_SECRET is not configured"
-            exit 1
-          fi
+          echo "value=$COVERAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Update badge
+        if: env.GIST_SECRET != ''
+        env:
+          COVERAGE: ${{ steps.coverage.outputs.value }}
+        run: |
+          set -euo pipefail
           echo "Coverage: $COVERAGE%"
           HUE=$(awk "BEGIN {h=($COVERAGE-50)/(95-50)*120; if(h<0)h=0; if(h>120)h=120; printf \"%.0f\", h}")
           BADGE="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"hsl($HUE, 100%, 40%)\"}"
@@ -73,6 +74,12 @@ jobs:
             -d "$PAYLOAD" \
             https://api.github.com/gists/77f18f115b500bdc5d6df52f95d399b9
 
-      - name: Clean Rust build artifacts
+      - name: Report missing badge secret
+        if: env.GIST_SECRET == ''
+        run: echo "::warning::GIST_SECRET is not configured; coverage was measured but the badge update was skipped"
+
+      - name: Clean generated artifacts
         if: always()
-        run: cargo clean
+        run: |
+          cargo clean
+          rm -rf apps/desktop/coverage

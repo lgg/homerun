@@ -17,8 +17,7 @@ describe("useJobHistory", () => {
   it("does not overlap a slow history request", async () => {
     vi.useFakeTimers();
     let resolveFirst:
-      | ((value: Awaited<ReturnType<typeof api.getRunnerHistory>>) => void)
-      | undefined;
+      ((value: Awaited<ReturnType<typeof api.getRunnerHistory>>) => void) | undefined;
     mockedApi.getRunnerHistory
       .mockReturnValueOnce(
         new Promise((resolve) => {

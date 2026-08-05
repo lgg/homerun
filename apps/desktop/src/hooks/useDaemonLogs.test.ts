@@ -17,8 +17,7 @@ describe("useDaemonLogs", () => {
   it("waits for a slow request before scheduling the next poll", async () => {
     vi.useFakeTimers();
     let resolveFirst:
-      | ((value: Awaited<ReturnType<typeof api.getDaemonLogsRecent>>) => void)
-      | undefined;
+      ((value: Awaited<ReturnType<typeof api.getDaemonLogsRecent>>) => void) | undefined;
     mockedApi.getDaemonLogsRecent
       .mockReturnValueOnce(
         new Promise((resolve) => {
