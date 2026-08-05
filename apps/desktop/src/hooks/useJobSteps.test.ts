@@ -19,9 +19,7 @@ describe("useJobSteps", () => {
   afterEach(() => vi.useRealTimers());
 
   it("refetches final logs when a step was expanded before its status was known", async () => {
-    let resolveSteps:
-      | ((value: Awaited<ReturnType<typeof api.getRunnerSteps>>) => void)
-      | undefined;
+    let resolveSteps: ((value: Awaited<ReturnType<typeof api.getRunnerSteps>>) => void) | undefined;
     mockedApi.getRunnerSteps.mockReturnValue(
       new Promise((resolve) => {
         resolveSteps = resolve;
@@ -83,9 +81,7 @@ describe("useJobSteps", () => {
         },
       ],
     };
-    mockedApi.getRunnerSteps
-      .mockResolvedValueOnce(firstJob)
-      .mockResolvedValue(secondJob);
+    mockedApi.getRunnerSteps.mockResolvedValueOnce(firstJob).mockResolvedValue(secondJob);
     mockedApi.getStepLogs
       .mockResolvedValueOnce({ step_number: 1, step_name: "Build", lines: ["first job"] })
       .mockResolvedValueOnce({ step_number: 1, step_name: "Build", lines: ["second job"] });
