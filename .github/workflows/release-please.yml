@@ -9,33 +9,22 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: homerun-ci-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release-please:
-    runs-on: [self-hosted, homerun-ci]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Verify release toolchain
+      - name: Install Rust toolchain
         if: ${{ steps.release.outputs.pr }}
-        run: |
-          set -euo pipefail
-          for tool in git rustc cargo; do
-            command -v "$tool" >/dev/null 2>&1 || {
-              echo "::error::$tool is not installed on the homerun-ci runner"
-              exit 1
-            }
-          done
+        uses: dtolnay/rust-toolchain@stable
 
       # When release-please creates or updates a PR, regenerate Cargo.lock files
       # so they remain synchronized with the version bump in Cargo.toml.
