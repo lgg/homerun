@@ -116,7 +116,7 @@ jobs:
           cat rust-lcov.info react-lcov-fixed.info > lcov.info
 
       - name: Coverage report
-        if: always()
+        if: always() && hashFiles('lcov.info') != ''
         continue-on-error: true
         uses: aGallea/tests-coverage-report@1.3.14
         with:
