@@ -92,9 +92,7 @@ export function useScan() {
           if (terminalScanIds.current.has(data.scan_id)) return;
           activeScanIds.current.add(data.scan_id);
           if (mounted.current) {
-            setProgressText(
-              `Starting ${data.scan_type} scan (${data.total} repositories)...`,
-            );
+            setProgressText(`Starting ${data.scan_type} scan (${data.total} repositories)...`);
           }
           return;
         }
