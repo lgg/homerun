@@ -10,76 +10,62 @@ permissions:
   contents: read
   pull-requests: write
 
-# A single project-specific runner executes every HomeRun maintenance workflow.
-# Keep pending runs queued instead of cancelling older work when new events arrive.
 concurrency:
-  group: homerun-ci-${{ github.repository }}
-  cancel-in-progress: false
+  group: homerun-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
 
 jobs:
-  quality:
-    # Never execute untrusted fork code on the persistent self-hosted machine.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    name: Full quality gate
-    runs-on: [self-hosted, homerun-ci]
+  ubuntu-quality:
+    name: Ubuntu quality gate
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Verify preinstalled toolchain
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Tauri Linux dependencies
         run: |
-          set -euo pipefail
-          for tool in git node npm rustc cargo; do
-            command -v "$tool" >/dev/null 2>&1 || {
-              echo "::error::$tool is not installed on the homerun-ci runner"
-              exit 1
-            }
-          done
-          cargo fmt --version >/dev/null 2>&1 || {
-            echo "::error::rustfmt is not installed on the homerun-ci runner"
-            exit 1
-          }
-          cargo clippy --version >/dev/null 2>&1 || {
-            echo "::error::clippy is not installed on the homerun-ci runner"
-            exit 1
-          }
-          cargo llvm-cov --version >/dev/null 2>&1 || {
-            echo "::error::cargo-llvm-cov is not installed on the homerun-ci runner"
-            exit 1
-          }
-          if command -v pre-commit >/dev/null 2>&1; then
-            echo "PRE_COMMIT_COMMAND=pre-commit" >> "$GITHUB_ENV"
-          elif command -v python >/dev/null 2>&1 && python -c "import pre_commit" >/dev/null 2>&1; then
-            echo "PRE_COMMIT_COMMAND=python -m pre_commit" >> "$GITHUB_ENV"
-          elif command -v python3 >/dev/null 2>&1 && python3 -c "import pre_commit" >/dev/null 2>&1; then
-            echo "PRE_COMMIT_COMMAND=python3 -m pre_commit" >> "$GITHUB_ENV"
-          else
-            echo "::error::pre-commit is not installed on the homerun-ci runner"
-            exit 1
-          fi
-          git --version
-          node --version
-          npm --version
-          rustc --version
-          cargo --version
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Install quality tools
+        run: |
+          python -m pip install --disable-pip-version-check pre-commit
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Install locked frontend dependencies
         working-directory: apps/desktop
         run: npm ci
 
+      - name: Audit frontend dependencies
+        working-directory: apps/desktop
+        run: npm audit --audit-level=high
+
       - name: Run pre-commit checks
         env:
           SKIP: no-commit-to-branch,cargo-test,cargo-clippy
-        run: $PRE_COMMIT_COMMAND run --all-files --show-diff-on-failure
+        run: pre-commit run --all-files --show-diff-on-failure
 
       - name: Run React tests with coverage
         working-directory: apps/desktop
@@ -96,14 +82,23 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
+      - name: Check Tauri formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-targets
+
       - name: Run Rust clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Run daemon tests with coverage
-        run: cargo llvm-cov -p homerund --all-features --lcov --output-path daemon-lcov.info
+      - name: Build release binaries
+        run: cargo build --release -p homerun -p homerund
 
-      - name: Run TUI tests with coverage
-        run: cargo llvm-cov -p homerun --all-features --lcov --output-path tui-lcov.info
+      - name: Smoke-test CLI
+        run: ./target/release/homerun --help
+
+      - name: Run Rust tests with coverage
+        run: cargo llvm-cov -p homerund -p homerun --all-features --lcov --output-path rust-lcov.info
 
       - name: Prepare Tauri sidecar
         working-directory: apps/desktop
@@ -118,7 +113,7 @@ jobs:
       - name: Merge coverage reports
         run: |
           sed 's|^SF:src/|SF:apps/desktop/src/|' apps/desktop/coverage/lcov.info > react-lcov-fixed.info
-          cat daemon-lcov.info tui-lcov.info react-lcov-fixed.info > lcov.info
+          cat rust-lcov.info react-lcov-fixed.info > lcov.info
 
       - name: Coverage report
         if: always()
@@ -139,3 +134,47 @@ jobs:
           cargo clean
           cargo clean --manifest-path apps/desktop/src-tauri/Cargo.toml
           rm -rf apps/desktop/src-tauri/binaries
+
+  windows-quality:
+    name: Windows quality gate
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Tauri formatting
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-targets
+
+      - name: Run Rust clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Build release binaries
+        run: cargo build --release -p homerun -p homerund
+
+      - name: Smoke-test CLI
+        shell: pwsh
+        run: .\target\release\homerun.exe --help
+
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
+
+      - name: Test Tauri crate
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+
+      - name: Lint Tauri crate
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
