@@ -1,0 +1,98 @@
+name: Coverage integrity patcher
+
+"on":
+  push:
+    branches: [audit/coverage-badge-integrity-2026-08-11]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: audit/coverage-badge-integrity-2026-08-11
+          fetch-depth: 0
+
+      - name: Replace stale external coverage badge
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          old = '  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/aGallea/77f18f115b500bdc5d6df52f95d399b9/raw/coverage.json" alt="Coverage" />'
+          new = '''  <a href="https://github.com/lgg/homerun/actions/workflows/coverage-badge.yml">
+            <img src="https://github.com/lgg/homerun/actions/workflows/coverage-badge.yml/badge.svg?branch=master" alt="Coverage" />
+          </a>'''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one stale coverage badge')
+          readme.write_text(text.replace(old, new, 1))
+
+          workflow = Path('.github/workflows/coverage-badge.yml')
+          text = workflow.read_text()
+          old_env = '''    env:
+      GIST_SECRET: ${{ secrets.GIST_SECRET }}
+'''
+          if text.count(old_env) != 1:
+              raise SystemExit('expected exactly one GIST_SECRET job env block')
+          text = text.replace(old_env, '', 1)
+
+          old_steps = '''      - name: Update badge
+        if: env.GIST_SECRET != ''
+        env:
+          COVERAGE: ${{ steps.coverage.outputs.value }}
+        run: |
+          set -euo pipefail
+          echo "Coverage: $COVERAGE%"
+          HUE=$(awk "BEGIN {h=($COVERAGE-50)/(95-50)*120; if(h<0)h=0; if(h>120)h=120; printf \\"%.0f\\", h}")
+          BADGE="{\\"schemaVersion\\":1,\\"label\\":\\"coverage\\",\\"message\\":\\"${COVERAGE}%\\",\\"color\\":\\"hsl($HUE, 100%, 40%)\\"}"
+          PAYLOAD="{\\"files\\":{\\"coverage.json\\":{\\"content\\":$(printf '%s' "$BADGE" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g; s/^/"/; s/$/"/')}}}"
+          curl --fail --silent --show-error -X PATCH \\
+            -H "Authorization: token $GIST_SECRET" \\
+            -H "Content-Type: application/json" \\
+            -d "$PAYLOAD" \\
+            https://api.github.com/gists/77f18f115b500bdc5d6df52f95d399b9
+
+      - name: Report missing badge secret
+        if: env.GIST_SECRET == ''
+        run: echo "::warning::GIST_SECRET is not configured; coverage was measured but the badge update was skipped"
+'''
+          new_steps = '''      - name: Report coverage
+        env:
+          COVERAGE: ${{ steps.coverage.outputs.value }}
+        run: |
+          set -euo pipefail
+          echo "Coverage: $COVERAGE%"
+          {
+            echo "### Coverage"
+            echo
+            echo "Line coverage: **$COVERAGE%**"
+          } >> "$GITHUB_STEP_SUMMARY"
+'''
+          if text.count(old_steps) != 1:
+              raise SystemExit('expected exactly one external badge update block')
+          workflow.write_text(text.replace(old_steps, new_steps, 1))
+          PY
+
+      - name: Validate patched files
+        run: |
+          set -euo pipefail
+          grep -q 'actions/workflows/coverage-badge.yml/badge.svg?branch=master' README.md
+          ! grep -q 'gist.githubusercontent.com/aGallea' README.md
+          ! grep -q 'GIST_SECRET' .github/workflows/coverage-badge.yml
+          ! grep -q 'api.github.com/gists' .github/workflows/coverage-badge.yml
+          grep -q 'Line coverage:' .github/workflows/coverage-badge.yml
+
+      - name: Commit fixes and remove patcher
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/coverage-integrity-patcher.yml
+          git add README.md .github/workflows/coverage-badge.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: make coverage badge repository-native"
+          git push origin HEAD:audit/coverage-badge-integrity-2026-08-11
