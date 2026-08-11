@@ -9,7 +9,7 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
-## [0.10.0](https://github.com/lgg/homerun/compare/v0.9.1...v0.10.0) (2026-08-11)
+## [0.10.0](https://github.com/lgg/homerun/compare/v0.8.5...v0.10.0) (2026-08-11)
 
 
 ### Features

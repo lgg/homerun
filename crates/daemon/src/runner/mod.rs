@@ -1164,6 +1164,13 @@ impl RunnerManager {
         if owner.is_empty() || repo.is_empty() || repo.contains('/') {
             bail!("Invalid repo name: expected non-empty 'owner/repo'");
         }
+        if owner
+            .chars()
+            .chain(repo.chars())
+            .any(|character| character.is_whitespace() || character.is_control())
+        {
+            bail!("Invalid repo name: whitespace and control characters are not allowed");
+        }
 
         if let Some(name) = name {
             let trimmed = name.trim();
@@ -5193,10 +5200,28 @@ name"
     }
 
     #[test]
-    fn test_validate_create_request_rejects_empty_repository_parts() {
-        for invalid in ["repo", "/repo", "owner/", "owner/repo/extra"] {
+    fn test_validate_create_request_rejects_malformed_repository_names() {
+        for invalid in [
+            "repo",
+            "/repo",
+            "owner/",
+            "owner/repo/extra",
+            " owner/repo",
+            "owner /repo",
+            "owner/ repo",
+            "owner/repo ",
+        ] {
             assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());
         }
+
+        for invalid in [
+            format!("owner/{}repo", char::from(9)),
+            format!("owner/repo{}", char::from(10)),
+        ] {
+            assert!(RunnerManager::validate_create_request(&invalid, None, None, None).is_err());
+        }
+
+        assert!(RunnerManager::validate_create_request("owner/repo", None, None, None).is_ok());
     }
 
     #[tokio::test]
