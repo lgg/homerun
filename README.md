@@ -25,7 +25,9 @@
   <a href="https://github.com/lgg/homerun/actions/workflows/ci.yml">
     <img src="https://github.com/lgg/homerun/actions/workflows/ci.yml/badge.svg?branch=master" alt="CI" />
   </a>
-  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/aGallea/77f18f115b500bdc5d6df52f95d399b9/raw/coverage.json" alt="Coverage" />
+  <a href="https://github.com/lgg/homerun/actions/workflows/coverage-badge.yml">
+    <img src="https://github.com/lgg/homerun/actions/workflows/coverage-badge.yml/badge.svg?branch=master" alt="Coverage" />
+  </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" />
   </a>
