@@ -79,6 +79,11 @@ jobs:
         working-directory: apps/desktop
         run: npm run build
 
+      - name: Verify Rust lockfiles
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo metadata --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1 > /dev/null
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
@@ -86,13 +91,13 @@ jobs:
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
 
       - name: Run Rust tests
-        run: cargo test --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets
 
       - name: Run Rust clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Build release binaries
-        run: cargo build --release -p homerun -p homerund
+        run: cargo build --locked --release -p homerun -p homerund
 
       - name: Smoke-test CLI
         run: ./target/release/homerun --help
@@ -105,10 +110,10 @@ jobs:
         run: npm run prepare-sidecar
 
       - name: Test Tauri crate
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
       - name: Lint Tauri crate
-        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Merge coverage reports
         run: |
@@ -150,6 +155,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Verify Rust lockfiles
+        shell: pwsh
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 > $null
+          cargo metadata --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-deps --format-version 1 > $null
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
 
@@ -157,13 +168,13 @@ jobs:
         run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
 
       - name: Run Rust tests
-        run: cargo test --workspace --all-targets
+        run: cargo test --locked --workspace --all-targets
 
       - name: Run Rust clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Build release binaries
-        run: cargo build --release -p homerun -p homerund
+        run: cargo build --locked --release -p homerun -p homerund
 
       - name: Smoke-test CLI
         shell: pwsh
@@ -174,7 +185,7 @@ jobs:
         run: npm run prepare-sidecar
 
       - name: Test Tauri crate
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
 
       - name: Lint Tauri crate
-        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

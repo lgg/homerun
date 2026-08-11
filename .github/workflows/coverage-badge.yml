@@ -43,6 +43,9 @@ jobs:
         working-directory: apps/desktop
         run: npm run test:coverage
 
+      - name: Verify Rust lockfile
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+
       - name: Run Rust tests with coverage
         run: cargo llvm-cov -p homerund -p homerun --all-features --summary-only 2>&1 | tee coverage-summary.txt
 
