@@ -5,6 +5,7 @@ on:
     branches: [master]
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -16,11 +17,95 @@ jobs:
   release-please:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      RELEASE_TOKEN_CONFIGURED: ${{ secrets.RELEASE_TOKEN != '' }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
         with:
           token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          # This repository currently disallows pull-request creation by the
+          # built-in GITHUB_TOKEN. When no dedicated RELEASE_TOKEN is present,
+          # still allow Release Please to tag an already-merged release PR but
+          # do not let it fail while attempting to open a new one.
+          skip-github-pull-request: ${{ secrets.RELEASE_TOKEN == '' }}
+
+      - name: Report disabled automatic release PR creation
+        if: ${{ env.RELEASE_TOKEN_CONFIGURED != 'true' && steps.release.outputs.release_created != 'true' }}
+        run: echo "::notice::RELEASE_TOKEN is not configured; automatic release PR creation is skipped because repository Actions policy blocks GITHUB_TOKEN from creating pull requests."
+
+      # Resources created with GITHUB_TOKEN do not recursively trigger normal
+      # tag/release workflows. A dedicated RELEASE_TOKEN does trigger them, so
+      # only dispatch explicitly when the built-in token created the release.
+      - name: Dispatch workflows for a newly created release
+        if: ${{ steps.release.outputs.release_created == 'true' && env.RELEASE_TOKEN_CONFIGURED != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-build.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+          gh workflow run docker-runner-image.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+
+      # Self-heal downstream release pipelines independently. Checking workflow
+      # state (rather than GitHub Release assets alone) means a successful
+      # release build cannot hide a failed Docker publish. Matching by release
+      # commit SHA also works whether the run was started by tag push or by
+      # workflow_dispatch.
+      - name: Recover incomplete latest release pipelines
+        if: ${{ steps.release.outputs.release_created != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG_NAME=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName' 2>/dev/null || true)
+          if [ -z "$TAG_NAME" ]; then
+            echo "No published release exists; nothing to recover."
+            exit 0
+          fi
+
+          TARGET_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG_NAME" --jq '.sha')
+
+          recover_workflow() {
+            local workflow="$1"
+            local label="$2"
+            local state status conclusion
+
+            state=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?per_page=50" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$TARGET_SHA\") | [.status, (.conclusion // \"\")] | @tsv" \
+              | head -n 1 || true)
+
+            if [ -z "$state" ]; then
+              echo "$label has no run for $TAG_NAME; dispatching."
+              gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+              return
+            fi
+
+            status=$(printf '%s\n' "$state" | cut -f1)
+            conclusion=$(printf '%s\n' "$state" | cut -f2)
+
+            case "$status" in
+              queued|in_progress|requested|waiting|pending)
+                echo "$label is already $status for $TAG_NAME; recovery not needed."
+                ;;
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "$label already succeeded for $TAG_NAME."
+                else
+                  echo "$label completed with ${conclusion:-unknown}; dispatching one recovery run."
+                  gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+                fi
+                ;;
+              *)
+                echo "$label has unexpected status '$status'; dispatching recovery run."
+                gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+                ;;
+            esac
+          }
+
+          recover_workflow release-build.yml "Release Build"
+          recover_workflow docker-runner-image.yml "Docker Runner Image"
 
       # When release-please creates or updates a PR, check out that branch so
       # all generated lockfiles stay synchronized with the version bumps.
