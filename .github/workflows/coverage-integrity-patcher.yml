@@ -1,4 +1,4 @@
-name: Coverage integrity patcher
+name: Coverage README patcher
 
 "on":
   push:
@@ -18,11 +18,10 @@ jobs:
           ref: audit/coverage-badge-integrity-2026-08-11
           fetch-depth: 0
 
-      - name: Apply repository-native coverage badge fix
+      - name: Replace stale external coverage badge
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           readme = Path("README.md")
           text = readme.read_text()
           old = '  <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/aGallea/77f18f115b500bdc5d6df52f95d399b9/raw/coverage.json" alt="Coverage" />'
@@ -30,51 +29,15 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit("stale README coverage badge not found exactly once")
           readme.write_text(text.replace(old, new, 1))
-
-          workflow = Path(".github/workflows/coverage-badge.yml")
-          text = workflow.read_text()
-          dollar = "$"
-          secret_block = "    env:\n      GIST_SECRET: " + dollar + "{{ secrets.GIST_SECRET }}\n"
-          if text.count(secret_block) != 1:
-              raise SystemExit("GIST_SECRET block not found exactly once")
-          text = text.replace(secret_block, "", 1)
-
-          start_marker = "      - name: Update badge\n"
-          end_marker = "      - name: Clean generated artifacts\n"
-          start = text.find(start_marker)
-          end = text.find(end_marker)
-          if start < 0 or end < 0 or end <= start:
-              raise SystemExit("external badge step range not found")
-          report = (
-              "      - name: Report coverage\n"
-              "        env:\n"
-              "          COVERAGE: " + dollar + "{{ steps.coverage.outputs.value }}\n"
-              "        run: |\n"
-              "          set -euo pipefail\n"
-              "          echo \"Coverage: $COVERAGE%\"\n"
-              "          {\n"
-              "            echo \"### Coverage\"\n"
-              "            echo\n"
-              "            echo \"Line coverage: **$COVERAGE%**\"\n"
-              "          } >> \"$GITHUB_STEP_SUMMARY\"\n\n"
-          )
-          workflow.write_text(text[:start] + report + text[end:])
           PY
-
-      - name: Validate patched files
-        run: |
-          set -euo pipefail
           grep -q 'actions/workflows/coverage-badge.yml/badge.svg?branch=master' README.md
           ! grep -q 'gist.githubusercontent.com/aGallea' README.md
-          ! grep -q 'GIST_SECRET' .github/workflows/coverage-badge.yml
-          ! grep -q 'api.github.com/gists' .github/workflows/coverage-badge.yml
-          grep -q 'Line coverage:' .github/workflows/coverage-badge.yml
 
-      - name: Commit fixes and remove patcher
+      - name: Commit README fix and remove patcher
         run: |
           set -euo pipefail
           git rm .github/workflows/coverage-integrity-patcher.yml
-          git add README.md .github/workflows/coverage-badge.yml
+          git add README.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "fix: make coverage badge repository-native"
