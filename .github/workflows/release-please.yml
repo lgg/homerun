@@ -22,6 +22,14 @@ jobs:
         with:
           token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
+      # When release-please creates or updates a PR, check out that branch so
+      # all generated lockfiles stay synchronized with the version bumps.
+      - uses: actions/checkout@v6
+        if: ${{ steps.release.outputs.pr }}
+        with:
+          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
       - name: Install Rust toolchain
         if: ${{ steps.release.outputs.pr }}
         uses: dtolnay/rust-toolchain@stable
@@ -33,14 +41,6 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-
-      # When release-please creates or updates a PR, regenerate lockfiles so
-      # they remain synchronized with the version bumps in the manifests.
-      - uses: actions/checkout@v6
-        if: ${{ steps.release.outputs.pr }}
-        with:
-          ref: ${{ fromJson(steps.release.outputs.pr).headBranchName }}
-          token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
       - name: Regenerate Cargo.lock files
         if: ${{ steps.release.outputs.pr }}
