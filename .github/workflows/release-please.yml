@@ -17,6 +17,8 @@ jobs:
   release-please:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      RELEASE_TOKEN_CONFIGURED: ${{ secrets.RELEASE_TOKEN != '' }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -29,7 +31,7 @@ jobs:
           skip-github-pull-request: ${{ secrets.RELEASE_TOKEN == '' }}
 
       - name: Report disabled automatic release PR creation
-        if: ${{ secrets.RELEASE_TOKEN == '' && steps.release.outputs.release_created != 'true' }}
+        if: ${{ env.RELEASE_TOKEN_CONFIGURED != 'true' && steps.release.outputs.release_created != 'true' }}
         run: echo "::notice::RELEASE_TOKEN is not configured; automatic release PR creation is skipped because repository Actions policy blocks GITHUB_TOKEN from creating pull requests."
 
       # Resources created with GITHUB_TOKEN do not recursively trigger normal
