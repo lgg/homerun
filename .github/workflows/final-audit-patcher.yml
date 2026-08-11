@@ -30,54 +30,13 @@ jobs:
                   raise SystemExit(f"expected exactly one match in {path}, found {count}")
               file.write_text(text.replace(old, new, 1))
 
-          replace_once(
-              "crates/daemon/src/runner/mod.rs",
-              '''        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-            bail!("Invalid repo name: expected non-empty 'owner/repo'");
-        }
-''',
-              '''        if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-            bail!("Invalid repo name: expected non-empty 'owner/repo'");
-        }
-        if owner
-            .chars()
-            .chain(repo.chars())
-            .any(|character| character.is_whitespace() || character.is_control())
-        {
-            bail!("Invalid repo name: whitespace and control characters are not allowed");
-        }
-''',
-          )
+          validation_old = "        if owner.is_empty() || repo.is_empty() || repo.contains('/') {\n            bail!(\"Invalid repo name: expected non-empty 'owner/repo'\");\n        }\n"
+          validation_new = validation_old + "        if owner\n            .chars()\n            .chain(repo.chars())\n            .any(|character| character.is_whitespace() || character.is_control())\n        {\n            bail!(\"Invalid repo name: whitespace and control characters are not allowed\");\n        }\n"
+          replace_once("crates/daemon/src/runner/mod.rs", validation_old, validation_new)
 
-          replace_once(
-              "crates/daemon/src/runner/mod.rs",
-              '''    #[test]
-    fn test_validate_create_request_rejects_empty_repository_parts() {
-        for invalid in ["repo", "/repo", "owner/", "owner/repo/extra"] {
-            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());
-        }
-    }
-''',
-              '''    #[test]
-    fn test_validate_create_request_rejects_malformed_repository_names() {
-        for invalid in [
-            "repo",
-            "/repo",
-            "owner/",
-            "owner/repo/extra",
-            " owner/repo",
-            "owner /repo",
-            "owner/ repo",
-            "owner/repo ",
-            "owner/\\trepo",
-            "owner/repo\\n",
-        ] {
-            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());
-        }
-        assert!(RunnerManager::validate_create_request("owner/repo", None, None, None).is_ok());
-    }
-''',
-          )
+          test_old = "    #[test]\n    fn test_validate_create_request_rejects_empty_repository_parts() {\n        for invalid in [\"repo\", \"/repo\", \"owner/\", \"owner/repo/extra\"] {\n            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());\n        }\n    }\n"
+          test_new = "    #[test]\n    fn test_validate_create_request_rejects_malformed_repository_names() {\n        for invalid in [\n            \"repo\",\n            \"/repo\",\n            \"owner/\",\n            \"owner/repo/extra\",\n            \" owner/repo\",\n            \"owner /repo\",\n            \"owner/ repo\",\n            \"owner/repo \",\n            \"owner/\\\\trepo\",\n            \"owner/repo\\\\n\",\n        ] {\n            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());\n        }\n        assert!(RunnerManager::validate_create_request(\"owner/repo\", None, None, None).is_ok());\n    }\n"
+          replace_once("crates/daemon/src/runner/mod.rs", test_old, test_new)
 
           replace_once(
               "CHANGELOG.md",
