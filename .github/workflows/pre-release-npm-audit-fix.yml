@@ -1,0 +1,41 @@
+name: Pre-release npm audit fix
+
+on:
+  push:
+    branches:
+      - fix/pre-release-ci-hardening-2026-08-11
+
+permissions:
+  contents: write
+
+jobs:
+  fix-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/pre-release-ci-hardening-2026-08-11
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Remediate audited transitive dependencies
+        working-directory: apps/desktop
+        run: |
+          set -euo pipefail
+          npm audit fix --package-lock-only --ignore-scripts
+          npm audit --audit-level=high
+
+      - name: Commit lock fix and remove helper
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/pre-release-npm-audit-fix.yml
+          git add apps/desktop/package-lock.json
+          git commit -m "fix: remediate nanoid audit advisory"
+          git push origin HEAD:fix/pre-release-ci-hardening-2026-08-11
