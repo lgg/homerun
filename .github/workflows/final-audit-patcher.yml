@@ -35,7 +35,7 @@ jobs:
           replace_once("crates/daemon/src/runner/mod.rs", validation_old, validation_new)
 
           test_old = "    #[test]\n    fn test_validate_create_request_rejects_empty_repository_parts() {\n        for invalid in [\"repo\", \"/repo\", \"owner/\", \"owner/repo/extra\"] {\n            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());\n        }\n    }\n"
-          test_new = "    #[test]\n    fn test_validate_create_request_rejects_malformed_repository_names() {\n        for invalid in [\n            \"repo\",\n            \"/repo\",\n            \"owner/\",\n            \"owner/repo/extra\",\n            \" owner/repo\",\n            \"owner /repo\",\n            \"owner/ repo\",\n            \"owner/repo \",\n            \"owner/\\\\trepo\",\n            \"owner/repo\\\\n\",\n        ] {\n            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());\n        }\n        assert!(RunnerManager::validate_create_request(\"owner/repo\", None, None, None).is_ok());\n    }\n"
+          test_new = "    #[test]\n    fn test_validate_create_request_rejects_malformed_repository_names() {\n        for invalid in [\n            \"repo\",\n            \"/repo\",\n            \"owner/\",\n            \"owner/repo/extra\",\n            \" owner/repo\",\n            \"owner /repo\",\n            \"owner/ repo\",\n            \"owner/repo \",\n        ] {\n            assert!(RunnerManager::validate_create_request(invalid, None, None, None).is_err());\n        }\n\n        for invalid in [\n            format!(\"owner/{}repo\", char::from(9)),\n            format!(\"owner/repo{}\", char::from(10)),\n        ] {\n            assert!(RunnerManager::validate_create_request(&invalid, None, None, None).is_err());\n        }\n\n        assert!(RunnerManager::validate_create_request(\"owner/repo\", None, None, None).is_ok());\n    }\n"
           replace_once("crates/daemon/src/runner/mod.rs", test_old, test_new)
 
           replace_once(
@@ -49,8 +49,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo fmt --all -- --check
-          cargo test -p homerund test_validate_create_request_rejects_malformed_repository_names
-          cargo clippy -p homerund --all-targets --all-features -- -D warnings
+          cargo test --locked -p homerund test_validate_create_request_rejects_malformed_repository_names
+          cargo clippy --locked -p homerund --all-targets --all-features -- -D warnings
 
       - name: Correct published v0.10.0 release notes
         env:
