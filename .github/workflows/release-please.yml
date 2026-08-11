@@ -26,8 +26,16 @@ jobs:
         if: ${{ steps.release.outputs.pr }}
         uses: dtolnay/rust-toolchain@stable
 
-      # When release-please creates or updates a PR, regenerate Cargo.lock files
-      # so they remain synchronized with the version bump in Cargo.toml.
+      - name: Setup Node.js
+        if: ${{ steps.release.outputs.pr }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # When release-please creates or updates a PR, regenerate lockfiles so
+      # they remain synchronized with the version bumps in the manifests.
       - uses: actions/checkout@v6
         if: ${{ steps.release.outputs.pr }}
         with:
@@ -41,14 +49,19 @@ jobs:
           cargo generate-lockfile
           cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-      - name: Commit updated Cargo.lock files
+      - name: Regenerate package-lock.json
+        if: ${{ steps.release.outputs.pr }}
+        working-directory: apps/desktop
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Commit updated lockfiles
         if: ${{ steps.release.outputs.pr }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock apps/desktop/src-tauri/Cargo.lock
+          git add Cargo.lock apps/desktop/src-tauri/Cargo.lock apps/desktop/package-lock.json
           if ! git diff --cached --quiet; then
-            git commit -m "chore: update Cargo.lock files for version bump"
+            git commit -m "chore: update lockfiles for version bump"
             git push
           fi
