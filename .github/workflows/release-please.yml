@@ -5,6 +5,7 @@ on:
     branches: [master]
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -21,6 +22,50 @@ jobs:
         id: release
         with:
           token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          # This repository currently disallows pull-request creation by the
+          # built-in GITHUB_TOKEN. When no dedicated RELEASE_TOKEN is present,
+          # still allow Release Please to tag an already-merged release PR but
+          # do not let it fail while attempting to open a new one.
+          skip-github-pull-request: ${{ secrets.RELEASE_TOKEN == '' }}
+
+      - name: Report disabled automatic release PR creation
+        if: ${{ secrets.RELEASE_TOKEN == '' && steps.release.outputs.release_created != 'true' }}
+        run: echo "::notice::RELEASE_TOKEN is not configured; automatic release PR creation is skipped because repository Actions policy blocks GITHUB_TOKEN from creating pull requests."
+
+      # Resources created with GITHUB_TOKEN do not recursively trigger normal
+      # tag/release workflows. workflow_dispatch is explicitly exempt from that
+      # recursion guard, so dispatch the build/publish pipelines ourselves.
+      - name: Dispatch workflows for a newly created release
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-build.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+          gh workflow run docker-runner-image.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+
+      # Self-heal a release that was created with GITHUB_TOKEN before explicit
+      # dispatching was enabled. Once build assets exist this becomes a no-op.
+      - name: Recover latest release when build assets are missing
+        if: ${{ steps.release.outputs.release_created != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG_NAME=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName' 2>/dev/null || true)
+          if [ -z "$TAG_NAME" ]; then
+            echo "No published release exists; nothing to recover."
+            exit 0
+          fi
+          ASSET_COUNT=$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          if [ "$ASSET_COUNT" -eq 0 ]; then
+            echo "Release $TAG_NAME has no build assets; dispatching release pipelines."
+            gh workflow run release-build.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+            gh workflow run docker-runner-image.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG_NAME"
+          else
+            echo "Release $TAG_NAME already has $ASSET_COUNT build assets; recovery not needed."
+          fi
 
       # When release-please creates or updates a PR, check out that branch so
       # all generated lockfiles stay synchronized with the version bumps.
