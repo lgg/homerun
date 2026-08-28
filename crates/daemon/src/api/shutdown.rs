@@ -19,28 +19,67 @@ pub async fn shutdown_daemon(
 
     tracing::info!("Shutdown requested via API");
 
+    // Install the lifecycle admission barrier before observing runner state. New
+    // lifecycle mutations are rejected from this point onward; operations admitted
+    // before the barrier retain their reservations and are drained below. Creation
+    // holds the same admission lock through its durable state write.
+    let admitted_starts = state
+        .runner_manager
+        .begin_shutdown_operation()
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": error.to_string() })),
+            )
+        })?;
+
     let runners = state.runner_manager.list().await;
-    let active_runners: Vec<_> = runners
-        .iter()
-        .filter(|r| {
-            r.state == crate::runner::state::RunnerState::Online
-                || r.state == crate::runner::state::RunnerState::Busy
-        })
-        .collect();
-    let active_count = active_runners.len();
+    let mut observed_active = 0usize;
+    for runner in &runners {
+        let transitional = !matches!(
+            runner.state,
+            crate::runner::state::RunnerState::Offline | crate::runner::state::RunnerState::Error
+        );
+        if transitional
+            || state
+                .runner_manager
+                .has_active_process(&runner.config.id)
+                .await
+        {
+            observed_active += 1;
+        }
+    }
+    // A newly admitted start may still report Offline/Error before its async
+    // start task publishes Registering, so retain at least the reservation count.
+    let active_count = observed_active.max(admitted_starts);
 
     tokio::spawn(async move {
+        // Wait for every lifecycle mutation that crossed the barrier first. Once
+        // this drains, no user/API/recovery operation can race the final process
+        // enumeration or begin a new start while shutdown is in progress.
+        state
+            .runner_manager
+            .wait_for_lifecycle_operations_to_finish()
+            .await;
+
         let runners = state.runner_manager.list().await;
         let mut stop_futures = Vec::new();
         for runner in &runners {
-            if runner.state == crate::runner::state::RunnerState::Online
+            let active = runner.state == crate::runner::state::RunnerState::Online
                 || runner.state == crate::runner::state::RunnerState::Busy
-            {
+                || state
+                    .runner_manager
+                    .has_active_process(&runner.config.id)
+                    .await;
+            if active {
                 tracing::info!("Stopping runner {} for shutdown", runner.config.name);
                 let manager = state.runner_manager.clone();
                 let id = runner.config.id.clone();
                 stop_futures.push(async move {
-                    if let Err(e) = manager.stop_process_preserving_intent(&id).await {
+                    // The shutdown barrier has drained prior reservations and blocks
+                    // new ones, so shutdown owns this final transition directly.
+                    if let Err(e) = manager.stop_process_internal(&id, false).await {
                         tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
                     }
                 });

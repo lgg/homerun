@@ -47,20 +47,9 @@ pub async fn create_runner(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Persist the running intent as part of creation, then reserve the lifecycle
-    // before returning 201 so a crash or immediate Delete cannot strand a Creating runner.
+    // Desired-running creation atomically persists intent and reserves the
+    // start under the daemon lifecycle barrier before returning here.
     let runner_id = runner.config.id.clone();
-    if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
-        let cleanup_error = state.runner_manager.delete(&runner_id).await.err();
-        let detail = cleanup_error
-            .map(|cleanup| format!("; cleanup also failed: {cleanup}"))
-            .unwrap_or_default();
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to admit runner start: {error}{detail}"),
-        ));
-    }
-
     let manager = state.runner_manager.clone();
     tokio::spawn(async move {
         if let Err(e) = manager.start_existing_reserved(&runner_id, &token).await {
