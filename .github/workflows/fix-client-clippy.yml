@@ -1,0 +1,53 @@
+name: Fix client clippy regressions
+
+on:
+  push:
+    branches:
+      - fix/runtime-home-runner-display-preferences
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/runtime-home-runner-display-preferences
+      - name: Replace err-expect test patterns
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              Path("crates/tui/src/client.rs"),
+              Path("apps/desktop/src-tauri/src/client.rs"),
+          ]
+          old = '''        let error = DaemonClient::default_socket_from_home(None)
+              .err()
+              .expect("missing HOME should fail");'''
+          new = '''        let error = match DaemonClient::default_socket_from_home(None) {
+              Ok(_) => panic!("missing HOME should fail"),
+              Err(error) => error,
+          };'''
+
+          for path in paths:
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected pattern missing in {path}")
+              path.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Commit fix and remove helper workflow
+        shell: bash
+        run: |
+          rm .github/workflows/fix-client-clippy.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/tui/src/client.rs apps/desktop/src-tauri/src/client.rs .github/workflows/fix-client-clippy.yml
+          git commit -m "test: satisfy clippy in client missing-home regressions"
+          git push origin HEAD:fix/runtime-home-runner-display-preferences
