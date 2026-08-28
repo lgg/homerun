@@ -8,7 +8,7 @@ on:
       - .github/workflows/capture-windows-tauri-clippy.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   capture:
@@ -20,28 +20,56 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 24
 
+      - name: Gate Unix-only Tauri test import
+        shell: pwsh
+        run: |
+          $path = "apps/desktop/src-tauri/src/client.rs"
+          $content = Get-Content -Raw -Path $path
+          $pattern = '(?m)^mod tests \{\r?\n    use super::\*;$'
+          $replacement = "mod tests {`r`n    #[cfg(unix)]`r`n    use super::*;"
+          $updated = [regex]::Replace($content, $pattern, $replacement, 1)
+          if ($updated -eq $content) {
+            throw "Expected Tauri test import pattern was not found"
+          }
+          Set-Content -Path $path -Value $updated -NoNewline
+          cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+          git diff --check
+
       - name: Prepare Tauri sidecar
         working-directory: apps/desktop
         run: npm run prepare-sidecar
 
-      - name: Capture standalone Tauri clippy
+      - name: Verify standalone Tauri clippy
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           & cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath windows-tauri-clippy.txt
-          "cargo_exit_code=$LASTEXITCODE" | Add-Content -Path windows-tauri-clippy.txt
-          exit 0
+          $exitCode = $LASTEXITCODE
+          "cargo_exit_code=$exitCode" | Add-Content -Path windows-tauri-clippy.txt
+          exit $exitCode
 
       - name: Upload diagnostic log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: windows-tauri-clippy-log
           path: windows-tauri-clippy.txt
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      - name: Commit verified fix
+        if: success()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/src-tauri/src/client.rs
+          git diff --cached --check
+          git commit -m "fix: gate Unix-only Tauri test import"
+          git push
