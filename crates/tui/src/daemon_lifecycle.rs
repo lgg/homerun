@@ -44,6 +44,8 @@ fn configure_spawned_daemon(_command: &mut Command) {}
 #[cfg(unix)]
 fn terminate_daemon_process_tree(child: &mut Child) -> Result<()> {
     let pid = child.id() as i32;
+    // The daemon was spawned in its own process group, so a negative PID targets
+    // the whole startup tree instead of only the homerund parent process.
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
     }
