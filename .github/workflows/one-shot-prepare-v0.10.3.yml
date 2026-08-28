@@ -1,0 +1,113 @@
+name: One-shot prepare v0.10.3
+
+on:
+  push:
+    branches: [release/v0.10.3]
+    paths:
+      - .github/workflows/one-shot-prepare-v0.10.3.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Bump project version to 0.10.3
+        shell: python
+        run: |
+          import json
+          import pathlib
+          import re
+
+          old = "0.10.2"
+          new = "0.10.3"
+
+          def bump_toml(path, section):
+              p = pathlib.Path(path)
+              text = p.read_text()
+              pattern = rf"(\[{re.escape(section)}\][\s\S]*?\nversion\s*=\s*\"){re.escape(old)}(\")"
+              updated, count = re.subn(pattern, rf"\g<1>{new}\g<2>", text, count=1)
+              if count != 1:
+                  raise SystemExit(f"Could not bump {path} [{section}] from {old}")
+              p.write_text(updated)
+
+          bump_toml("Cargo.toml", "workspace.package")
+          bump_toml("apps/desktop/src-tauri/Cargo.toml", "package")
+
+          for path in ["apps/desktop/package.json", "apps/desktop/src-tauri/tauri.conf.json"]:
+              p = pathlib.Path(path)
+              data = json.loads(p.read_text())
+              if data.get("version") != old:
+                  raise SystemExit(f"Unexpected version in {path}: {data.get('version')}")
+              data["version"] = new
+              p.write_text(json.dumps(data, indent=2) + "\n")
+
+          manifest = pathlib.Path(".release-please-manifest.json")
+          data = json.loads(manifest.read_text())
+          if data.get(".") != old:
+              raise SystemExit(f"Unexpected release manifest version: {data.get('.')}")
+          data["."] = new
+          manifest.write_text(json.dumps(data, indent=2) + "\n")
+
+          changelog = pathlib.Path("CHANGELOG.md")
+          text = changelog.read_text()
+          marker = "---\n\n"
+          entry = (
+              "## [0.10.3](https://github.com/lgg/homerun/compare/v0.10.2...v0.10.3) (2026-08-28)\n\n"
+              "### Bug Fixes\n\n"
+              "* recover missing release and Docker pipelines through the release workflow\n"
+              "* clean migrated GitHub runner state before reconfiguration\n"
+              "* rebuild incomplete runner binary caches instead of trusting partial extraction\n"
+              "* report a missing Unix home directory as an error instead of panicking\n"
+              "* clean up the daemon process tree when daemon startup fails\n"
+              "* serialize lifecycle admission during daemon shutdown and wait for durable runner creation\n"
+              "* keep the daemon alive and reopen lifecycle admission when any runner fails to stop\n\n"
+          )
+          if "## [0.10.3]" not in text:
+              if marker not in text:
+                  raise SystemExit("CHANGELOG insertion marker not found")
+              text = text.replace(marker, marker + entry, 1)
+              changelog.write_text(text)
+
+      - name: Regenerate release lockfiles
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cd apps/desktop
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Validate prepared diff
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -q 'version = "0.10.3"' Cargo.toml
+          grep -q 'version = "0.10.3"' apps/desktop/src-tauri/Cargo.toml
+          grep -q '"version": "0.10.3"' apps/desktop/package.json
+          grep -q '"version": "0.10.3"' apps/desktop/src-tauri/tauri.conf.json
+          grep -q '".": "0.10.3"' .release-please-manifest.json
+          grep -q '## \[0.10.3\]' CHANGELOG.md
+
+      - name: Commit clean release state
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-prepare-v0.10.3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(master): release 0.10.3"
+          git push origin HEAD:release/v0.10.3
