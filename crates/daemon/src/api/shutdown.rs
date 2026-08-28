@@ -21,7 +21,8 @@ pub async fn shutdown_daemon(
 
     // Install the lifecycle admission barrier before observing runner state. New
     // lifecycle mutations are rejected from this point onward; operations admitted
-    // before the barrier retain their reservations and are drained below.
+    // before the barrier retain their reservations and are drained below. Creation
+    // holds the same admission lock through its durable state write.
     let admitted_starts = state
         .runner_manager
         .begin_shutdown_operation()
