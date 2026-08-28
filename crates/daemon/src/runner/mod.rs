@@ -1711,6 +1711,13 @@ impl RunnerManager {
         Ok(operations.starting.len())
     }
 
+    /// Re-open lifecycle admission when shutdown cannot complete. Callers must
+    /// first drain operations admitted before the barrier so reopening cannot
+    /// overlap an older mutation that shutdown had already accepted.
+    pub(crate) async fn cancel_shutdown_operation(&self) {
+        self.lifecycle_operations.lock().await.shutting_down = false;
+    }
+
     /// Wait for all lifecycle mutations admitted before the shutdown barrier.
     /// New mutations cannot appear after `begin_shutdown_operation`.
     pub(crate) async fn wait_for_lifecycle_operations_to_finish(&self) {
@@ -3387,6 +3394,31 @@ mod tests {
         let runner = create_task.await.unwrap().unwrap();
         assert_eq!(shutdown_task.await.unwrap().unwrap(), 0);
         assert!(manager.get(&runner.config.id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_shutdown_reopens_lifecycle_admission() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 0);
+        assert!(manager
+            .begin_start_operation(&runner.config.id)
+            .await
+            .is_err());
+
+        manager.cancel_shutdown_operation().await;
+        manager
+            .begin_start_operation(&runner.config.id)
+            .await
+            .unwrap();
+        manager.finish_start_operation(&runner.config.id).await;
+
+        // A later shutdown can install a fresh barrier normally.
+        assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 0);
     }
 
     #[tokio::test]
