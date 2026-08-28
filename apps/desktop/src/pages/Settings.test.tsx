@@ -44,6 +44,8 @@ const preferences: Preferences = {
   scan_labels: ["self-hosted"],
   workspace_path: null,
   auto_scan: false,
+  hide_offline_runners_in_mini_view: false,
+  sort_runners_by_activity: false,
 };
 
 describe("Settings", () => {
@@ -122,6 +124,20 @@ describe("Settings", () => {
         start_runners_on_launch: true,
         notify_job_completions: false,
       }),
+    );
+  });
+
+  it("persists runner list display preferences", async () => {
+    render(<Settings />);
+    const hideOffline = await screen.findByRole("switch", {
+      name: "Hide offline runners in Mini View",
+    });
+    await waitFor(() => expect(hideOffline).not.toBeDisabled());
+    fireEvent.click(hideOffline);
+    await waitFor(() =>
+      expect(mocks.updatePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ hide_offline_runners_in_mini_view: true }),
+      ),
     );
   });
 

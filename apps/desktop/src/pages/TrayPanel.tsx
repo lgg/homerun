@@ -4,6 +4,8 @@ import { useTrayIcon } from "../hooks/useTrayIcon";
 import { api } from "../api/commands";
 import { jobProgress, formatJobElapsed } from "../utils/runnerHelpers";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { useRunnerDisplayPreferences } from "../hooks/useRunnerDisplayPreferences";
+import { filterCompactRunners, sortRunnersByActivity } from "../utils/runnerOrdering";
 
 const stateColors: Record<string, string> = {
   online: "var(--accent-green)",
@@ -28,6 +30,8 @@ export function TrayPanel() {
   const { runners, loading, error } = useRunners();
   const daemonOk = !loading && error === null;
   const [daemonStopping, setDaemonStopping] = useState(false);
+  const { hideOfflineRunnersInMiniView, sortRunnersByActivity: sortByRecentActivity } =
+    useRunnerDisplayPreferences();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useTrayIcon(runners, daemonOk);
@@ -42,7 +46,7 @@ export function TrayPanel() {
 
   useEffect(() => {
     resizeToFit();
-  }, [runners, resizeToFit]);
+  }, [runners, hideOfflineRunnersInMiniView, resizeToFit]);
 
   const counts = { online: 0, busy: 0, offline: 0, transitioning: 0 };
   for (const runner of runners) {
@@ -52,10 +56,13 @@ export function TrayPanel() {
     else counts.transitioning++;
   }
 
-  const sorted = [...runners].sort((a, b) => {
-    const order: Record<string, number> = { busy: 0, online: 1, creating: 1, registering: 1 };
-    return (order[a.state] ?? 2) - (order[b.state] ?? 2);
-  });
+  const compactRunners = filterCompactRunners(runners, hideOfflineRunnersInMiniView);
+  const sorted = sortByRecentActivity
+    ? sortRunnersByActivity(compactRunners)
+    : [...compactRunners].sort((a, b) => {
+        const order: Record<string, number> = { busy: 0, online: 1, creating: 1, registering: 1 };
+        return (order[a.state] ?? 2) - (order[b.state] ?? 2);
+      });
 
   return (
     <div className="tray-panel" ref={containerRef}>
@@ -135,9 +142,13 @@ export function TrayPanel() {
             </div>
           );
         })}
-        {runners.length === 0 && (
+        {sorted.length === 0 && (
           <div className="tray-no-runners">
-            {daemonOk ? "No runners configured" : "Cannot reach daemon"}
+            {!daemonOk
+              ? "Cannot reach daemon"
+              : runners.length > 0 && hideOfflineRunnersInMiniView
+                ? "Offline runners hidden"
+                : "No runners configured"}
           </div>
         )}
       </div>

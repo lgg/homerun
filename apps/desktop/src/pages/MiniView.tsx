@@ -5,6 +5,8 @@ import { api } from "../api/commands";
 import type { RunnerInfo } from "../api/types";
 import { jobProgress, formatJobElapsed } from "../utils/runnerHelpers";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { useRunnerDisplayPreferences } from "../hooks/useRunnerDisplayPreferences";
+import { sortRunnersByActivity } from "../utils/runnerOrdering";
 
 function countByState(runners: RunnerInfo[]): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -26,6 +28,7 @@ const MINI_WIDTH = 280;
 
 export function MiniView() {
   const { runners, loading, error } = useRunners();
+  const { sortRunnersByActivity: sortByRecentActivity } = useRunnerDisplayPreferences();
   const positionSaved = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -38,13 +41,14 @@ export function MiniView() {
       .catch(() => {});
   }, []);
 
-  const busy = runners
-    .filter((r) => r.state === "busy")
-    .sort((a, b) => {
-      const aTime = a.job_started_at ? new Date(a.job_started_at).getTime() : -Infinity;
-      const bTime = b.job_started_at ? new Date(b.job_started_at).getTime() : -Infinity;
-      return bTime - aTime;
-    });
+  const busyRunners = runners.filter((runner) => runner.state === "busy");
+  const busy = sortByRecentActivity
+    ? sortRunnersByActivity(busyRunners)
+    : busyRunners.sort((a, b) => {
+        const aTime = a.job_started_at ? new Date(a.job_started_at).getTime() : -Infinity;
+        const bTime = b.job_started_at ? new Date(b.job_started_at).getTime() : -Infinity;
+        return bTime - aTime;
+      });
 
   const counts = countByState(runners);
   const daemonOk = !loading && error === null;

@@ -59,6 +59,8 @@ export function Settings() {
     scan_labels: [],
     workspace_path: null,
     auto_scan: false,
+    hide_offline_runners_in_mini_view: false,
+    sort_runners_by_activity: false,
   });
 
   const desiredPreferencesRef = useRef(preferences);
@@ -625,6 +627,28 @@ export function Settings() {
             checked={preferences.notify_job_completions}
             disabled={preferencesLoading || preferencesSaving}
             onChange={(checked) => updatePreference("notify_job_completions", checked)}
+          />
+        </div>
+      </section>
+
+      {/* Runner Lists */}
+      <section style={{ marginBottom: 32 }}>
+        <SectionHeader title="Runner Lists" />
+        <div className="card">
+          <ToggleSetting
+            label="Hide offline runners in Mini View"
+            description="Hide offline and error runners from the compact Mini View list. The main Runners page is unchanged."
+            checked={preferences.hide_offline_runners_in_mini_view}
+            disabled={preferencesLoading || preferencesSaving}
+            onChange={(checked) => updatePreference("hide_offline_runners_in_mini_view", checked)}
+          />
+          <Divider />
+          <ToggleSetting
+            label="Sort runners by recent activity"
+            description="Show currently busy and most recently active runners first in both the main and compact lists. Offline runners stay at the bottom."
+            checked={preferences.sort_runners_by_activity}
+            disabled={preferencesLoading || preferencesSaving}
+            onChange={(checked) => updatePreference("sort_runners_by_activity", checked)}
           />
         </div>
       </section>

@@ -6,6 +6,7 @@ import { useAuth } from "../hooks/useAuth";
 import { StatsCard } from "../components/StatsCard";
 import { RunnerTable } from "../components/RunnerTable";
 import { NewRunnerWizard } from "../components/NewRunnerWizard";
+import { useRunnerDisplayPreferences } from "../hooks/useRunnerDisplayPreferences";
 
 export function Dashboard() {
   const { auth } = useAuth();
@@ -28,6 +29,7 @@ export function Dashboard() {
     scaleGroup,
   } = useOutletContext<RunnersContextType>();
   const { metrics } = useMetrics();
+  const { sortRunnersByActivity } = useRunnerDisplayPreferences();
   const [showWizard, setShowWizard] = useState(false);
   const [filter, setFilter] = useState("");
 
@@ -170,6 +172,7 @@ export function Dashboard() {
         forceExpandedGroups={forceExpandedGroups}
         pendingActions={pendingActions}
         readOnly={!isAuthenticated}
+        sortByActivity={sortRunnersByActivity}
       />
 
       {showWizard && (

@@ -14,7 +14,15 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let client = DaemonClient::default_socket();
+    let client = match DaemonClient::default_socket() {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("Failed to resolve HomeRun daemon connection: {error}");
+            return;
+        }
+    };
+    let sidecar_client = client.clone_connection();
+    let event_client = client.clone_connection();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -24,7 +32,7 @@ pub fn run() {
         .manage(AppState {
             client: Mutex::new(client),
         })
-        .setup(|app| {
+        .setup(move |app| {
             // -- Build menu --
             let check_updates =
                 MenuItem::with_id(app, "check_updates", "View Releases...", true, None::<&str>)?;
@@ -129,8 +137,8 @@ pub fn run() {
 
             // -- Spawn daemon sidecar if not running --
             let handle = app.handle().clone();
+            let client = sidecar_client.clone_connection();
             tauri::async_runtime::spawn(async move {
-                let client = crate::client::DaemonClient::default_socket();
                 if client.health().await.is_ok() {
                     return;
                 }
@@ -153,12 +161,12 @@ pub fn run() {
             // Reconnect continuously so a daemon restart does not leave the desktop
             // stuck on polling-only updates.
             let event_handle = app.handle().clone();
+            let client = event_client.clone_connection();
             tauri::async_runtime::spawn(async move {
                 use futures::StreamExt;
                 use tokio_tungstenite::tungstenite::Message;
 
                 loop {
-                    let client = crate::client::DaemonClient::default_socket();
                     if let Ok(mut events) = client.connect_events().await {
                         while let Some(message) = events.next().await {
                             match message {

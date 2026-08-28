@@ -23,6 +23,8 @@ function makePrefs(overrides?: Partial<Preferences>): Preferences {
     scan_labels: [],
     workspace_path: null,
     auto_scan: false,
+    hide_offline_runners_in_mini_view: false,
+    sort_runners_by_activity: false,
     ...overrides,
   };
 }
