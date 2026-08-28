@@ -30,10 +30,14 @@ fn classify_shutdown_error(message: &str, daemon_healthy: bool) -> ShutdownError
 }
 
 #[cfg(unix)]
-fn default_socket_path() -> PathBuf {
-    dirs::home_dir()
-        .expect("no home directory")
-        .join(".homerun/daemon.sock")
+fn socket_path_from_home(home: Option<PathBuf>) -> Result<PathBuf> {
+    home.map(|path| path.join(".homerun/daemon.sock"))
+        .context("Cannot determine home directory for HomeRun daemon socket")
+}
+
+#[cfg(unix)]
+fn default_socket_path() -> Result<PathBuf> {
+    socket_path_from_home(dirs::home_dir())
 }
 
 #[cfg(windows)]
@@ -58,8 +62,10 @@ async fn is_daemon_running() -> bool {
 
 pub async fn start_daemon() -> Result<()> {
     #[cfg(unix)]
+    let socket = default_socket_path()?;
+
+    #[cfg(unix)]
     {
-        let socket = default_socket_path();
         if is_daemon_running(&socket).await {
             bail!("Daemon is already running");
         }
@@ -84,7 +90,7 @@ pub async fn start_daemon() -> Result<()> {
         .context("Failed to spawn homerund")?;
 
     #[cfg(unix)]
-    let client = DaemonClient::new(default_socket_path());
+    let client = DaemonClient::new(socket);
     #[cfg(windows)]
     let client = DaemonClient::new_pipe(default_pipe_name());
 
@@ -102,7 +108,7 @@ pub async fn start_daemon() -> Result<()> {
 
 pub async fn stop_daemon() -> Result<()> {
     #[cfg(unix)]
-    let socket = default_socket_path();
+    let socket = default_socket_path()?;
 
     #[cfg(unix)]
     if !socket.exists() {
@@ -185,7 +191,7 @@ pub async fn stop_daemon() -> Result<()> {
 
 pub async fn restart_daemon() -> Result<()> {
     #[cfg(unix)]
-    if is_daemon_running(&default_socket_path()).await {
+    if is_daemon_running(&default_socket_path()?).await {
         stop_daemon().await?;
     }
     #[cfg(windows)]
@@ -213,6 +219,16 @@ mod tests {
         assert_eq!(
             classify_shutdown_error("Daemon is installed as a system service", true),
             ShutdownErrorDisposition::ServiceManaged
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_path_requires_home_directory() {
+        assert!(socket_path_from_home(None).is_err());
+        assert_eq!(
+            socket_path_from_home(Some(PathBuf::from("/tmp/homerun-home"))).unwrap(),
+            PathBuf::from("/tmp/homerun-home/.homerun/daemon.sock")
         );
     }
 }
