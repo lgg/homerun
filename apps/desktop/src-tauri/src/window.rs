@@ -192,6 +192,18 @@ fn keep_mini_window_on_screen(win: &WebviewWindow) -> Result<bool, tauri::Error>
     Ok(had_visible_overlap)
 }
 
+fn install_mini_window_bounds_handler(win: &WebviewWindow) {
+    let mini = win.clone();
+    win.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+        ) {
+            let _ = keep_mini_window_on_screen(&mini);
+        }
+    });
+}
+
 fn show_mini_window(app: &AppHandle, win: &WebviewWindow) -> Result<(), String> {
     keep_mini_window_on_screen(win).map_err(|e| e.to_string())?;
     win.show().map_err(|e| e.to_string())?;
@@ -251,6 +263,7 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
         .visible(false);
 
     let win = builder.build().map_err(|e: tauri::Error| e.to_string())?;
+    install_mini_window_bounds_handler(&win);
 
     // Restore the previous position first, then validate it against the
     // currently connected monitors. Stale positions from a removed/rearranged
