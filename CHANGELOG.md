@@ -9,6 +9,18 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.10.3](https://github.com/lgg/homerun/compare/v0.10.2...v0.10.3) (2026-08-28)
+
+### Bug Fixes
+
+* recover missing release and Docker pipelines through the release workflow
+* clean migrated GitHub runner state before reconfiguration
+* rebuild incomplete runner binary caches instead of trusting partial extraction
+* report a missing Unix home directory as an error instead of panicking
+* clean up the daemon process tree when daemon startup fails
+* serialize lifecycle admission during daemon shutdown and wait for durable runner creation
+* keep the daemon alive and reopen lifecycle admission when any runner fails to stop
+
 ## [0.10.2](https://github.com/lgg/homerun/compare/v0.10.1...v0.10.2) (2026-08-28)
 
 ### Bug Fixes
