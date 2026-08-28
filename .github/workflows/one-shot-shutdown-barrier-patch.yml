@@ -1,0 +1,504 @@
+name: One-shot shutdown lifecycle barrier patch
+
+on:
+  push:
+    branches:
+      - fix/shutdown-lifecycle-barrier-2026-08-28
+    paths:
+      - .github/workflows/one-shot-shutdown-barrier-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/shutdown-lifecycle-barrier-2026-08-28
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply lifecycle barrier
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          mod = "crates/daemon/src/runner/mod.rs"
+
+          replace_once(
+              mod,
+              '''#[derive(Default)]
+          struct LifecycleOperations {
+              starting: HashSet<String>,
+              stopping: HashSet<String>,
+              updating: HashSet<String>,
+              deleting: HashSet<String>,
+          }
+          ''',
+              '''#[derive(Default)]
+          struct LifecycleOperations {
+              starting: HashSet<String>,
+              stopping: HashSet<String>,
+              updating: HashSet<String>,
+              deleting: HashSet<String>,
+              shutting_down: bool,
+          }
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''            estimated_job_duration_secs: None,
+                  };
+          
+                  let _persistence_guard = self.persistence_lock.lock().await;
+          ''',
+              '''            estimated_job_duration_secs: None,
+                  };
+          
+                  // Desired-running creation also reserves the start under the same
+                  // lifecycle mutex used by daemon shutdown. This closes the gap where
+                  // shutdown could begin after persistence but before the API reserved
+                  // the runner's start operation.
+                  let mut creation_operations = if desired {
+                      let operations = self.lifecycle_operations.lock().await;
+                      if operations.shutting_down {
+                          let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                          bail!("Daemon shutdown is in progress");
+                      }
+                      Some(operations)
+                  } else {
+                      None
+                  };
+          
+                  let _persistence_guard = self.persistence_lock.lock().await;
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''            runners.insert(id.clone(), runner.clone());
+                  }
+                  if desired {
+                      self.desired_running.write().await.insert(id.clone());
+                  }
+          ''',
+              '''            runners.insert(id.clone(), runner.clone());
+                  }
+                  if let Some(operations) = creation_operations.as_mut() {
+                      if !operations.starting.insert(id.clone()) {
+                          self.runners.write().await.remove(&id);
+                          let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                          bail!("Runner '{id}' already has a start operation in progress");
+                      }
+                  }
+                  drop(creation_operations);
+                  if desired {
+                      self.desired_running.write().await.insert(id.clone());
+                  }
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''        if let Err(error) = self.save_to_disk_locked().await {
+                      self.runners.write().await.remove(&id);
+                      if desired {
+                          self.desired_running.write().await.remove(&id);
+                      }
+                      let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                      return Err(error).context("persisting newly-created runner");
+                  }
+          ''',
+              '''        if let Err(error) = self.save_to_disk_locked().await {
+                      self.runners.write().await.remove(&id);
+                      if desired {
+                          self.desired_running.write().await.remove(&id);
+                      }
+                      let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                      drop(_persistence_guard);
+                      if desired {
+                          self.finish_start_operation(&id).await;
+                      }
+                      return Err(error).context("persisting newly-created runner");
+                  }
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''    pub(crate) async fn begin_start_operation(&self, id: &str) -> Result<()> {
+                  let mut operations = self.lifecycle_operations.lock().await;
+                  if operations.deleting.contains(id) {
+          ''',
+              '''    pub(crate) async fn begin_start_operation(&self, id: &str) -> Result<()> {
+                  let mut operations = self.lifecycle_operations.lock().await;
+                  if operations.shutting_down {
+                      bail!("Daemon shutdown is in progress");
+                  }
+                  if operations.deleting.contains(id) {
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''    pub(crate) async fn finish_start_operation(&self, id: &str) {
+                  self.lifecycle_operations.lock().await.starting.remove(id);
+              }
+          
+              pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
+          ''',
+              '''    pub(crate) async fn finish_start_operation(&self, id: &str) {
+                  self.lifecycle_operations.lock().await.starting.remove(id);
+              }
+          
+              /// Atomically stop admitting new starts and return the number of starts
+              /// that were already admitted. Existing starts keep their reservation so
+              /// shutdown can wait for them before deciding which processes to stop.
+              pub(crate) async fn begin_shutdown_operation(&self) -> Result<usize> {
+                  let mut operations = self.lifecycle_operations.lock().await;
+                  if operations.shutting_down {
+                      bail!("Daemon shutdown is already in progress");
+                  }
+                  operations.shutting_down = true;
+                  Ok(operations.starting.len())
+              }
+          
+              /// Wait until every start admitted before the shutdown barrier has
+              /// finished. New starts cannot appear after `begin_shutdown_operation`.
+              pub(crate) async fn wait_for_start_operations_to_finish(&self) {
+                  loop {
+                      let pending = self.lifecycle_operations.lock().await.starting.len();
+                      if pending == 0 {
+                          break;
+                      }
+                      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                  }
+              }
+          
+              pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
+          ''',
+          )
+
+          replace_once(
+              mod,
+              '''    #[tokio::test]
+              async fn test_create_desired_running_persists_intent_atomically() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create_desired_running("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+          
+                  assert!(manager.is_desired_running(&runner.config.id).await);
+                  let persisted: Vec<PersistedRunner> = serde_json::from_str(
+                      &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+                  )
+                  .unwrap();
+                  assert_eq!(persisted.len(), 1);
+                  assert_eq!(persisted[0].config.id, runner.config.id);
+                  assert!(persisted[0].was_running);
+              }
+          ''',
+              '''    #[tokio::test]
+              async fn test_create_desired_running_persists_intent_atomically() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create_desired_running("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+          
+                  assert!(manager.is_desired_running(&runner.config.id).await);
+                  let persisted: Vec<PersistedRunner> = serde_json::from_str(
+                      &std::fs::read_to_string(manager.config.runners_json_path()).unwrap(),
+                  )
+                  .unwrap();
+                  assert_eq!(persisted.len(), 1);
+                  assert_eq!(persisted[0].config.id, runner.config.id);
+                  assert!(persisted[0].was_running);
+          
+                  // Desired-running creation must return with its start already admitted.
+                  assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 1);
+                  manager.finish_start_operation(&runner.config.id).await;
+              }
+          
+              #[tokio::test]
+              async fn test_shutdown_barrier_rejects_new_starts() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+          
+                  assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 0);
+                  let error = manager
+                      .begin_start_operation(&runner.config.id)
+                      .await
+                      .unwrap_err();
+                  assert!(error.to_string().contains("shutdown"));
+              }
+          
+              #[tokio::test]
+              async fn test_shutdown_waits_for_previously_admitted_start() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create("owner/repo", None, None, None, None, None)
+                      .await
+                      .unwrap();
+                  let id = runner.config.id;
+          
+                  manager.begin_start_operation(&id).await.unwrap();
+                  assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 1);
+                  assert!(tokio::time::timeout(
+                      std::time::Duration::from_millis(25),
+                      manager.wait_for_start_operations_to_finish(),
+                  )
+                  .await
+                  .is_err());
+          
+                  manager.finish_start_operation(&id).await;
+                  tokio::time::timeout(
+                      std::time::Duration::from_secs(1),
+                      manager.wait_for_start_operations_to_finish(),
+                  )
+                  .await
+                  .unwrap();
+              }
+          ''',
+          )
+
+          runners = "crates/daemon/src/api/runners.rs"
+          replace_once(
+              runners,
+              '''    // Persist the running intent as part of creation, then reserve the lifecycle
+              // before returning 201 so a crash or immediate Delete cannot strand a Creating runner.
+              let runner_id = runner.config.id.clone();
+              if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+                  let cleanup_error = state.runner_manager.delete(&runner_id).await.err();
+                  let detail = cleanup_error
+                      .map(|cleanup| format!("; cleanup also failed: {cleanup}"))
+                      .unwrap_or_default();
+                  return Err((
+                      StatusCode::INTERNAL_SERVER_ERROR,
+                      format!("Failed to admit runner start: {error}{detail}"),
+                  ));
+              }
+          
+              let manager = state.runner_manager.clone();
+          ''',
+              '''    // Desired-running creation atomically persists intent and reserves the
+              // start under the daemon lifecycle barrier before returning here.
+              let runner_id = runner.config.id.clone();
+              let manager = state.runner_manager.clone();
+          ''',
+          )
+
+          groups = "crates/daemon/src/api/groups.rs"
+          replace_once(
+              groups,
+              '''    // Creation persisted desired-running intent atomically. Reserve every start
+              // before spawning any work so the batch response cannot publish unadmitted runners.
+              let mut reserved: Vec<String> = Vec::with_capacity(runners.len());
+              for runner in &runners {
+                  let runner_id = runner.config.id.clone();
+                  if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+                      for reserved_id in &reserved {
+                          state
+                              .runner_manager
+                              .finish_start_operation(reserved_id)
+                              .await;
+                      }
+                      let mut cleanup_errors = Vec::new();
+                      for created in &runners {
+                          if let Err(cleanup) = state.runner_manager.delete(&created.config.id).await {
+                              cleanup_errors.push(format!("{}: {cleanup}", created.config.id));
+                          }
+                      }
+                      let cleanup_detail = if cleanup_errors.is_empty() {
+                          String::new()
+                      } else {
+                          format!("; cleanup failures: {}", cleanup_errors.join(", "))
+                      };
+                      return Err((
+                          StatusCode::INTERNAL_SERVER_ERROR,
+                          format!("Failed to admit batch runner start: {error}{cleanup_detail}"),
+                      ));
+                  }
+                  reserved.push(runner_id);
+              }
+          
+              for runner_id in reserved {
+          ''',
+              '''    // Each desired-running runner is returned with its start reservation held.
+              for runner in &runners {
+                  let runner_id = runner.config.id.clone();
+          ''',
+          )
+
+          replace_once(
+              groups,
+              '''    // Scale-up creation persisted intent atomically. Reserve every new runner
+              // before spawning any of them so the returned count is fully admitted.
+              let mut reserved: Vec<String> = Vec::with_capacity(response.added.len());
+              for runner in &response.added {
+                  let runner_id = runner.config.id.clone();
+                  if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
+                      for reserved_id in &reserved {
+                          state
+                              .runner_manager
+                              .finish_start_operation(reserved_id)
+                              .await;
+                      }
+                      let mut cleanup_errors = Vec::new();
+                      for added in &response.added {
+                          if let Err(cleanup) = state.runner_manager.delete(&added.config.id).await {
+                              cleanup_errors.push(format!("{}: {cleanup}", added.config.id));
+                          }
+                      }
+                      let cleanup_detail = if cleanup_errors.is_empty() {
+                          String::new()
+                      } else {
+                          format!("; cleanup failures: {}", cleanup_errors.join(", "))
+                      };
+                      return Err((
+                          StatusCode::INTERNAL_SERVER_ERROR,
+                          format!("Failed to admit scaled runner start: {error}{cleanup_detail}"),
+                      ));
+                  }
+                  reserved.push(runner_id);
+              }
+          
+              for runner_id in reserved {
+          ''',
+              '''    // Added desired-running runners already hold start reservations.
+              for runner in &response.added {
+                  let runner_id = runner.config.id.clone();
+          ''',
+          )
+
+          shutdown = "crates/daemon/src/api/shutdown.rs"
+          replace_once(
+              shutdown,
+              '''    tracing::info!("Shutdown requested via API");
+          
+              let runners = state.runner_manager.list().await;
+              let active_runners: Vec<_> = runners
+                  .iter()
+                  .filter(|r| {
+                      r.state == crate::runner::state::RunnerState::Online
+                          || r.state == crate::runner::state::RunnerState::Busy
+                  })
+                  .collect();
+              let active_count = active_runners.len();
+          
+              tokio::spawn(async move {
+                  let runners = state.runner_manager.list().await;
+                  let mut stop_futures = Vec::new();
+                  for runner in &runners {
+                      if runner.state == crate::runner::state::RunnerState::Online
+                          || runner.state == crate::runner::state::RunnerState::Busy
+                      {
+                          tracing::info!("Stopping runner {} for shutdown", runner.config.name);
+                          let manager = state.runner_manager.clone();
+                          let id = runner.config.id.clone();
+                          stop_futures.push(async move {
+                              if let Err(e) = manager.stop_process_preserving_intent(&id).await {
+                                  tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
+                              }
+                          });
+                      }
+                  }
+                  futures::future::join_all(stop_futures).await;
+          ''',
+              '''    tracing::info!("Shutdown requested via API");
+          
+              let admitted_starts = state
+                  .runner_manager
+                  .begin_shutdown_operation()
+                  .await
+                  .map_err(|error| {
+                      (
+                          StatusCode::CONFLICT,
+                          Json(json!({ "error": error.to_string() })),
+                      )
+                  })?;
+          
+              let runners = state.runner_manager.list().await;
+              let mut active_count = admitted_starts;
+              for runner in &runners {
+                  let transitional = !matches!(
+                      runner.state,
+                      crate::runner::state::RunnerState::Offline
+                          | crate::runner::state::RunnerState::Error
+                  );
+                  if transitional || state.runner_manager.has_active_process(&runner.config.id).await {
+                      active_count = active_count.max(1);
+                  }
+              }
+          
+              tokio::spawn(async move {
+                  // A start admitted before the barrier is allowed to finish. Once all
+                  // reservations drain, no later start can race process enumeration.
+                  state
+                      .runner_manager
+                      .wait_for_start_operations_to_finish()
+                      .await;
+          
+                  let runners = state.runner_manager.list().await;
+                  let mut stop_futures = Vec::new();
+                  for runner in &runners {
+                      let active = runner.state == crate::runner::state::RunnerState::Online
+                          || runner.state == crate::runner::state::RunnerState::Busy
+                          || state.runner_manager.has_active_process(&runner.config.id).await;
+                      if active {
+                          tracing::info!("Stopping runner {} for shutdown", runner.config.name);
+                          let manager = state.runner_manager.clone();
+                          let id = runner.config.id.clone();
+                          stop_futures.push(async move {
+                              if let Err(e) = manager.stop_process_preserving_intent(&id).await {
+                                  tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
+                              }
+                          });
+                      }
+                  }
+                  futures::future::join_all(stop_futures).await;
+          ''',
+          )
+
+          # Keep the CLI's extended shutdown timeout whenever any runner is in a
+          # transitional/active state. Exact count is informational; avoid double
+          # counting an admitted start that is already represented in the runner list.
+          replace_once(
+              shutdown,
+              '''            active_count = active_count.max(1);
+          ''',
+              '''            active_count = active_count.max(admitted_starts.max(1));
+          ''',
+          )
+
+      - name: Format Rust changes
+        run: cargo fmt --all
+
+      - name: Commit patch and remove one-shot workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-shutdown-barrier-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: block runner starts during daemon shutdown"
+          git push origin HEAD:fix/shutdown-lifecycle-barrier-2026-08-28
