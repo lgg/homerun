@@ -131,7 +131,9 @@ async fn fetch_and_cache(
         );
         tokio::fs::remove_dir_all(&runner_dir)
             .await
-            .with_context(|| format!("Failed to remove incomplete runner cache {:?}", runner_dir))?;
+            .with_context(|| {
+                format!("Failed to remove incomplete runner cache {:?}", runner_dir)
+            })?;
     }
 
     tokio::fs::create_dir_all(&runner_dir)
