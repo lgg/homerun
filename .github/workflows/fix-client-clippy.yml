@@ -20,25 +20,29 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import re
           from pathlib import Path
 
           paths = [
               Path("crates/tui/src/client.rs"),
               Path("apps/desktop/src-tauri/src/client.rs"),
           ]
-          old = '''        let error = DaemonClient::default_socket_from_home(None)
-              .err()
-              .expect("missing HOME should fail");'''
-          new = '''        let error = match DaemonClient::default_socket_from_home(None) {
-              Ok(_) => panic!("missing HOME should fail"),
-              Err(error) => error,
-          };'''
+          pattern = re.compile(
+              r'let error = DaemonClient::default_socket_from_home\(None\)\s*'
+              r'\.err\(\)\s*'
+              r'\.expect\("missing HOME should fail"\);'
+          )
+          replacement = (
+              'let error = match DaemonClient::default_socket_from_home(None) { '
+              'Ok(_) => panic!("missing HOME should fail"), Err(error) => error };'
+          )
 
           for path in paths:
               text = path.read_text()
-              if old not in text:
-                  raise SystemExit(f"expected pattern missing in {path}")
-              path.write_text(text.replace(old, new, 1))
+              updated, count = pattern.subn(replacement, text, count=1)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one pattern in {path}, found {count}")
+              path.write_text(updated)
           PY
           cargo fmt --all
           cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
