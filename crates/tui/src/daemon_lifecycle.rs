@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 #[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -29,22 +31,69 @@ fn classify_shutdown_error(message: &str, daemon_healthy: bool) -> ShutdownError
     }
 }
 
+#[cfg(unix)]
+fn configure_spawned_daemon(command: &mut Command) {
+    // Give the daemon its own process group so failed startup cleanup can
+    // terminate any runner children it spawned before becoming healthy.
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_spawned_daemon(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_daemon_process_tree(child: &mut Child) -> Result<()> {
+    let pid = child.id() as i32;
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    let result = unsafe { kill(-pid, 9) };
+    if result != 0
+        && child
+            .try_wait()
+            .context("Failed to inspect homerund after process-group cleanup")?
+            .is_none()
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("Failed to terminate timed-out homerund process group");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_daemon_process_tree(child: &mut Child) -> Result<()> {
+    let pid = child.id().to_string();
+    let status = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("Failed to invoke taskkill for timed-out homerund process tree")?;
+    if !status.success()
+        && child
+            .try_wait()
+            .context("Failed to inspect homerund after taskkill")?
+            .is_none()
+    {
+        bail!("taskkill failed to terminate timed-out homerund process tree");
+    }
+    Ok(())
+}
+
 fn terminate_spawned_daemon(child: &mut Child) -> Result<()> {
-    match child
+    if child
         .try_wait()
         .context("Failed to inspect spawned homerund process")?
+        .is_some()
     {
-        Some(_) => Ok(()),
-        None => {
-            child
-                .kill()
-                .context("Failed to terminate timed-out homerund process")?;
-            child
-                .wait()
-                .context("Failed to reap timed-out homerund process")?;
-            Ok(())
-        }
+        return Ok(());
     }
+    terminate_daemon_process_tree(child)?;
+    child
+        .wait()
+        .context("Failed to reap timed-out homerund process")?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -100,7 +149,9 @@ pub async fn start_daemon() -> Result<()> {
 
     let binary = which::which("homerund")
         .context("homerund not found in PATH. Install it or add it to your PATH.")?;
-    let mut child = std::process::Command::new(&binary)
+    let mut command = Command::new(&binary);
+    configure_spawned_daemon(&mut command);
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -268,6 +319,32 @@ mod tests {
             .unwrap();
         child.wait().unwrap();
         terminate_spawned_daemon(&mut child).unwrap();
+    }
+
+    #[test]
+    fn cleanup_terminates_running_child() {
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 30"]);
+            configure_spawned_daemon(&mut command);
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
+            configure_spawned_daemon(&mut command);
+            command
+        };
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        terminate_spawned_daemon(&mut child).unwrap();
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[cfg(unix)]
