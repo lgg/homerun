@@ -352,7 +352,13 @@ fn start_login_polling(
     interval: u64,
 ) {
     tokio::spawn(async move {
-        let client = DaemonClient::default_socket();
+        let client = match DaemonClient::default_socket() {
+            Ok(client) => client,
+            Err(error) => {
+                let _ = event_tx.send(AppEvent::LoginCompleted(Err(error.to_string())));
+                return;
+            }
+        };
         loop {
             match client.poll_device_flow(&device_code, interval).await {
                 Ok(Some(auth)) => {
