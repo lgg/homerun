@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn test_preferences_backward_compat_defaults() {
-        // Simulate an existing config.toml that has no scan fields
+        // Simulate a legacy config.toml that is missing newer preference fields.
         let toml_str = r#"
             base_dir = "/tmp/.homerun"
 
