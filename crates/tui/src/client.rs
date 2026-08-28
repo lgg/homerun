@@ -383,15 +383,20 @@ impl DaemonClient {
         }
     }
 
-    pub fn default_socket() -> Self {
+    #[cfg(unix)]
+    fn default_socket_from_home(home: Option<PathBuf>) -> Result<Self> {
+        let home = home.context("Cannot determine home directory for HomeRun daemon socket")?;
+        Ok(Self::new(home.join(".homerun/daemon.sock")))
+    }
+
+    pub fn default_socket() -> Result<Self> {
         #[cfg(unix)]
         {
-            let home = dirs::home_dir().expect("no home directory");
-            Self::new(home.join(".homerun/daemon.sock"))
+            Self::default_socket_from_home(dirs::home_dir())
         }
         #[cfg(windows)]
         {
-            Self::new_pipe(r"\\.\pipe\homerun-daemon".to_string())
+            Ok(Self::new_pipe(r"\\.\pipe\homerun-daemon".to_string()))
         }
     }
 
@@ -823,6 +828,15 @@ impl DaemonClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_default_socket_reports_missing_home() {
+        let error = DaemonClient::default_socket_from_home(None)
+            .err()
+            .expect("missing HOME should fail");
+        assert!(error.to_string().contains("Cannot determine home directory"));
+    }
 
     #[tokio::test]
     async fn test_parse_runners_response() {

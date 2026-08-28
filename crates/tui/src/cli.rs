@@ -85,7 +85,7 @@ pub async fn run(command: Option<CliCommand>) -> Result<()> {
         }
     }
 
-    let client = DaemonClient::default_socket();
+    let client = DaemonClient::default_socket()?;
     if client.health().await.is_err() {
         eprintln!(
             "Cannot connect to HomeRun daemon.\n\

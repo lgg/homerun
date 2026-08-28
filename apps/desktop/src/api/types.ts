@@ -71,6 +71,7 @@ export interface RunnerInfo {
   pid: number | null;
   container_id?: string | null;
   uptime_secs: number | null;
+  started_at?: string | null;
   jobs_completed: number;
   jobs_failed: number;
   current_job?: string | null;
@@ -247,6 +248,8 @@ export interface Preferences {
   scan_labels: string[];
   workspace_path: string | null;
   auto_scan: boolean;
+  hide_offline_runners_in_mini_view: boolean;
+  sort_runners_by_activity: boolean;
 }
 
 export interface DiscoveredRepo {

@@ -70,6 +70,8 @@ pub struct RunnerInfo {
     #[serde(default)]
     pub container_id: Option<String>,
     pub uptime_secs: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<String>,
     pub jobs_completed: u32,
     pub jobs_failed: u32,
     pub current_job: Option<String>,
@@ -296,6 +298,10 @@ pub struct Preferences {
     pub workspace_path: Option<String>,
     #[serde(default)]
     pub auto_scan: bool,
+    #[serde(default)]
+    pub hide_offline_runners_in_mini_view: bool,
+    #[serde(default)]
+    pub sort_runners_by_activity: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,15 +431,21 @@ impl DaemonClient {
         Self { pipe_name }
     }
 
-    pub fn default_socket() -> Self {
+    #[cfg(unix)]
+    fn default_socket_from_home(home: Option<PathBuf>) -> Result<Self, String> {
+        let home = home
+            .ok_or_else(|| "Cannot determine home directory for HomeRun daemon socket".to_string())?;
+        Ok(Self::new(home.join(".homerun/daemon.sock")))
+    }
+
+    pub fn default_socket() -> Result<Self, String> {
         #[cfg(unix)]
         {
-            let home = dirs::home_dir().expect("no home directory");
-            Self::new(home.join(".homerun/daemon.sock"))
+            Self::default_socket_from_home(dirs::home_dir())
         }
         #[cfg(windows)]
         {
-            Self::new_pipe(r"\\.\pipe\homerun-daemon".to_string())
+            Ok(Self::new_pipe(r"\\.\pipe\homerun-daemon".to_string()))
         }
     }
 
@@ -954,5 +966,20 @@ impl DaemonClient {
             .map_err(|e| format!("Failed to open daemon event stream: {e}"))?;
         let (_, read) = ws_stream.split();
         Ok(read)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_default_socket_reports_missing_home() {
+        let error = DaemonClient::default_socket_from_home(None)
+            .err()
+            .expect("missing HOME should fail");
+        assert!(error.contains("Cannot determine home directory"));
     }
 }

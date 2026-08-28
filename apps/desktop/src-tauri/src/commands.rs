@@ -47,26 +47,21 @@ fn remove_stale_socket(client: &crate::client::DaemonClient) {
     }
 }
 
-#[tauri::command]
-pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> {
+async fn do_start_daemon(
+    app_handle: tauri::AppHandle,
+    client: crate::client::DaemonClient,
+) -> Result<bool, String> {
     use std::time::Duration;
     use tauri_plugin_shell::ShellExt;
 
-    // Check if daemon is already running
-    let client = crate::client::DaemonClient::default_socket();
     if client.socket_exists() {
         let check = tokio::time::timeout(std::time::Duration::from_secs(2), client.health()).await;
         if matches!(check, Ok(Ok(_))) {
             return Err("Daemon is already running".to_string());
         }
-        // Stale socket — remove it
-        #[cfg(unix)]
-        {
-            let _ = std::fs::remove_file(client.socket_path());
-        }
+        remove_stale_socket(&client);
     }
 
-    // Spawn sidecar
     let sidecar = app_handle
         .shell()
         .sidecar("homerund")
@@ -76,11 +71,9 @@ pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> 
         .spawn()
         .map_err(|e| format!("Failed to spawn daemon: {e}"))?;
 
-    // Poll until healthy
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let fresh = crate::client::DaemonClient::default_socket();
-        if fresh.health().await.is_ok() {
+        if client.health().await.is_ok() {
             return Ok(true);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -91,6 +84,15 @@ pub async fn start_daemon(app_handle: tauri::AppHandle) -> Result<bool, String> 
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+#[tauri::command]
+pub async fn start_daemon(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let client = state.client.lock().await.clone_connection();
+    do_start_daemon(app_handle, client).await
 }
 
 /// Helper: stop the daemon (not a Tauri command — avoids State<> lifetime issues)
@@ -163,9 +165,9 @@ pub async fn restart_daemon(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let client = state.client.lock().await.clone_connection();
-    do_stop_daemon(client).await?;
+    do_stop_daemon(client.clone_connection()).await?;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-    start_daemon(app_handle).await
+    do_start_daemon(app_handle, client).await
 }
 
 #[tauri::command]

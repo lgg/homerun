@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_tui() -> Result<()> {
-    let client = DaemonClient::default_socket();
+    let client = DaemonClient::default_socket()?;
     let mut app = App::new();
 
     // Check daemon connectivity

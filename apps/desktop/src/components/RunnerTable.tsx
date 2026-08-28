@@ -5,6 +5,7 @@ import { StatusBadge } from "./StatusBadge";
 import { RunnerActions } from "./RunnerActions";
 import { RunnerGroupRow } from "./RunnerGroupRow";
 import { DockerBadge } from "./DockerBadge";
+import { compareRunnersByActivity } from "../utils/runnerOrdering";
 
 // Persists across navigations (module-level)
 const persistedExpandedGroups = new Set<string>();
@@ -24,6 +25,7 @@ interface RunnerTableProps {
   forceExpandedGroups?: Set<string>;
   pendingActions?: Set<string>;
   readOnly?: boolean;
+  sortByActivity?: boolean;
 }
 
 function SvcBadge() {
@@ -102,6 +104,7 @@ export function RunnerTable({
   forceExpandedGroups,
   pendingActions,
   readOnly = false,
+  sortByActivity = false,
 }: RunnerTableProps) {
   const navigate = useNavigate();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
@@ -132,6 +135,8 @@ export function RunnerTable({
   const { groups, soloRunners } = useMemo(() => {
     const byName = (a: RunnerInfo, b: RunnerInfo) =>
       a.config.name.localeCompare(b.config.name, undefined, { numeric: true });
+    const orderRunners = (items: RunnerInfo[]) =>
+      items.sort(sortByActivity ? compareRunnersByActivity : byName);
 
     // Group by name prefix + repo (merges runners from separate batch creates)
     const mergedMap = new Map<string, RunnerInfo[]>();
@@ -148,11 +153,19 @@ export function RunnerTable({
         solo.push(runner);
       }
     }
-    // Sort runners within each group and solo runners by name (numeric-aware)
-    for (const group of mergedMap.values()) group.sort(byName);
-    solo.sort(byName);
-    return { groups: mergedMap, soloRunners: solo };
-  }, [runners]);
+
+    for (const group of mergedMap.values()) orderRunners(group);
+    orderRunners(solo);
+
+    const groupEntries = Array.from(mergedMap.entries());
+    if (sortByActivity) {
+      groupEntries.sort(([aKey, aRunners], [bKey, bRunners]) => {
+        const byActivity = compareRunnersByActivity(aRunners[0], bRunners[0]);
+        return byActivity || aKey.localeCompare(bKey, undefined, { numeric: true });
+      });
+    }
+    return { groups: groupEntries, soloRunners: solo };
+  }, [runners, sortByActivity]);
 
   if (runners.length === 0) {
     return (
@@ -168,7 +181,7 @@ export function RunnerTable({
   return (
     <div className="runner-list">
       {/* Groups */}
-      {Array.from(groups.entries()).map(([groupKey, groupRunners]) => {
+      {groups.map(([groupKey, groupRunners]) => {
         const isExpanded = effectiveExpanded.has(groupKey);
         const groupIds = [
           ...new Set(groupRunners.map((r) => r.config.group_id).filter(Boolean)),

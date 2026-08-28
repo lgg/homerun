@@ -60,6 +60,8 @@ mod tests {
         assert_eq!(json["start_runners_on_launch"], false);
         assert_eq!(json["notify_status_changes"], true);
         assert_eq!(json["notify_job_completions"], true);
+        assert_eq!(json["hide_offline_runners_in_mini_view"], false);
+        assert_eq!(json["sort_runners_by_activity"], false);
     }
 
     #[tokio::test]
@@ -73,7 +75,7 @@ mod tests {
                     .uri("/preferences")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"start_runners_on_launch":true,"notify_status_changes":false,"notify_job_completions":true}"#,
+                        r#"{"start_runners_on_launch":true,"notify_status_changes":false,"notify_job_completions":true,"hide_offline_runners_in_mini_view":true,"sort_runners_by_activity":true}"#,
                     ))
                     .unwrap(),
             )
@@ -86,5 +88,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["start_runners_on_launch"], true);
         assert_eq!(json["notify_status_changes"], false);
+        assert_eq!(json["hide_offline_runners_in_mini_view"], true);
+        assert_eq!(json["sort_runners_by_activity"], true);
     }
 }
