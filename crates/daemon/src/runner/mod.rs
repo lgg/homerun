@@ -3349,6 +3349,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_shutdown_waits_for_creation_persistence_transaction() {
+        let manager = create_test_manager();
+        let persistence_guard = manager.persistence_lock.lock().await;
+
+        let create_manager = manager.clone();
+        let create_task = tokio::spawn(async move {
+            create_manager
+                .create("owner/repo", None, None, None, None, None)
+                .await
+        });
+
+        // create_with_intent acquires lifecycle admission before persistence.
+        // Keep the persistence transaction blocked until that admission lock
+        // is definitely held, then prove shutdown cannot overtake it.
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if manager.lifecycle_operations.try_lock().is_err() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("creation never acquired lifecycle admission");
+
+        let shutdown_manager = manager.clone();
+        let mut shutdown_task =
+            tokio::spawn(async move { shutdown_manager.begin_shutdown_operation().await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(25), &mut shutdown_task,)
+                .await
+                .is_err()
+        );
+
+        drop(persistence_guard);
+        let runner = create_task.await.unwrap().unwrap();
+        assert_eq!(shutdown_task.await.unwrap().unwrap(), 0);
+        assert!(manager.get(&runner.config.id).await.is_some());
+    }
+
+    #[tokio::test]
     async fn test_shutdown_barrier_rejects_new_starts() {
         let manager = create_test_manager();
         let runner = manager
