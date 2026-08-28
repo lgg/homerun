@@ -79,13 +79,36 @@ pub async fn shutdown_daemon(
                 stop_futures.push(async move {
                     // The shutdown barrier has drained prior reservations and blocks
                     // new ones, so shutdown owns this final transition directly.
-                    if let Err(e) = manager.stop_process_internal(&id, false).await {
-                        tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
-                    }
+                    let result = manager.stop_process_internal(&id, false).await;
+                    (id, result)
                 });
             }
         }
-        futures::future::join_all(stop_futures).await;
+
+        let stop_results = futures::future::join_all(stop_futures).await;
+        let mut attempted_ids = Vec::with_capacity(stop_results.len());
+        let mut stop_failed = false;
+        for (id, result) in stop_results {
+            attempted_ids.push(id.clone());
+            if let Err(error) = result {
+                stop_failed = true;
+                tracing::warn!("Failed to stop runner {} for shutdown: {}", id, error);
+            }
+        }
+
+        if stop_failed {
+            // Do not exit while a runner may still be alive. Re-open lifecycle
+            // admission and restore any successfully stopped desired runners;
+            // the CLI will observe that the daemon is still healthy and report
+            // the shutdown timeout instead of claiming success.
+            tracing::error!("Daemon shutdown aborted because one or more runners did not stop");
+            state.runner_manager.cancel_shutdown_operation().await;
+            for id in attempted_ids {
+                state.runner_manager.schedule_recovery(id);
+            }
+            return;
+        }
+
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         // On Unix, clean up the socket file. On Windows, named pipes are
         // kernel objects and require no file cleanup.
