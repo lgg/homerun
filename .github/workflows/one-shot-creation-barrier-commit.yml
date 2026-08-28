@@ -26,63 +26,42 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+
           path = Path("crates/daemon/src/runner/mod.rs")
           text = path.read_text()
 
-          old = '''        if desired && !creation_operations.starting.insert(id.clone()) {
-              self.runners.write().await.remove(&id);
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              bail!("Runner '{id}' already has a start operation in progress");
-          }
-          drop(creation_operations);
-          if desired {
-              self.desired_running.write().await.insert(id.clone());
-          }
+          def replace_once(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              text = text.replace(old, new, 1)
 
-          if let Err(error) = self.save_to_disk_locked().await {
-              self.runners.write().await.remove(&id);
-              if desired {
-                  self.desired_running.write().await.remove(&id);
-              }
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              drop(_persistence_guard);
-              if desired {
-                  self.finish_start_operation(&id).await;
-              }
-              return Err(error).context("persisting newly-created runner");
-          }
-          Ok(runner)
-          '''
-          new = '''        if desired && !creation_operations.starting.insert(id.clone()) {
-              self.runners.write().await.remove(&id);
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              bail!("Runner '{id}' already has a start operation in progress");
-          }
-          if desired {
-              self.desired_running.write().await.insert(id.clone());
-          }
+          replace_once(
+              "        drop(creation_operations);\n        if desired {\n            self.desired_running.write().await.insert(id.clone());\n        }",
+              "        if desired {\n            self.desired_running.write().await.insert(id.clone());\n        }",
+              "early lifecycle unlock",
+          )
 
-          if let Err(error) = self.save_to_disk_locked().await {
-              self.runners.write().await.remove(&id);
-              if desired {
-                  self.desired_running.write().await.remove(&id);
-                  creation_operations.starting.remove(&id);
-              }
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              drop(_persistence_guard);
-              drop(creation_operations);
-              return Err(error).context("persisting newly-created runner");
-          }
+          replace_once(
+              "            if desired {\n                self.desired_running.write().await.remove(&id);\n            }\n            let _ = std::fs::remove_dir_all(&runner.config.work_dir);",
+              "            if desired {\n                self.desired_running.write().await.remove(&id);\n                creation_operations.starting.remove(&id);\n            }\n            let _ = std::fs::remove_dir_all(&runner.config.work_dir);",
+              "persistence rollback reservation",
+          )
 
-          // Keep lifecycle admission locked through the durable write. Shutdown
-          // therefore cannot overtake a creation that it failed to reject.
-          drop(_persistence_guard);
-          drop(creation_operations);
-          Ok(runner)
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f"Expected exactly one creation transaction block, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
+          replace_once(
+              "            drop(_persistence_guard);\n            if desired {\n                self.finish_start_operation(&id).await;\n            }\n            return Err(error).context(\"persisting newly-created runner\");",
+              "            drop(_persistence_guard);\n            drop(creation_operations);\n            return Err(error).context(\"persisting newly-created runner\");",
+              "rollback lifecycle unlock",
+          )
+
+          replace_once(
+              "        }\n        Ok(runner)\n    }\n\n    pub async fn create_batch(",
+              "        }\n\n        // Keep lifecycle admission locked through the durable write. Shutdown\n        // therefore cannot overtake a creation that it failed to reject.\n        drop(_persistence_guard);\n        drop(creation_operations);\n        Ok(runner)\n    }\n\n    pub async fn create_batch(",
+              "successful lifecycle unlock",
+          )
+
+          path.write_text(text)
       - name: Format Rust changes
         run: cargo fmt --all
       - name: Commit patch and remove workflow
