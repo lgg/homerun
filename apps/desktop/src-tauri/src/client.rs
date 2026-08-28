@@ -977,9 +977,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_default_socket_reports_missing_home() {
-        let error = DaemonClient::default_socket_from_home(None)
-            .err()
-            .expect("missing HOME should fail");
+        let error = match DaemonClient::default_socket_from_home(None) {
+            Ok(_) => panic!("missing HOME should fail"),
+            Err(error) => error,
+        };
         assert!(error.contains("Cannot determine home directory"));
     }
 }
