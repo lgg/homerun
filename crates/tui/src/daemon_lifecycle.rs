@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 #[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -27,6 +29,73 @@ fn classify_shutdown_error(message: &str, daemon_healthy: bool) -> ShutdownError
     } else {
         ShutdownErrorDisposition::AlreadyStopped
     }
+}
+
+#[cfg(unix)]
+fn configure_spawned_daemon(command: &mut Command) {
+    // Give the daemon its own process group so failed startup cleanup can
+    // terminate any runner children it spawned before becoming healthy.
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_spawned_daemon(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn terminate_daemon_process_tree(child: &mut Child) -> Result<()> {
+    let pid = child.id() as i32;
+    // The daemon was spawned in its own process group, so a negative PID targets
+    // the whole startup tree instead of only the homerund parent process.
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    let result = unsafe { kill(-pid, 9) };
+    if result != 0
+        && child
+            .try_wait()
+            .context("Failed to inspect homerund after process-group cleanup")?
+            .is_none()
+    {
+        return Err(std::io::Error::last_os_error())
+            .context("Failed to terminate timed-out homerund process group");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate_daemon_process_tree(child: &mut Child) -> Result<()> {
+    let pid = child.id().to_string();
+    let status = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("Failed to invoke taskkill for timed-out homerund process tree")?;
+    if !status.success()
+        && child
+            .try_wait()
+            .context("Failed to inspect homerund after taskkill")?
+            .is_none()
+    {
+        bail!("taskkill failed to terminate timed-out homerund process tree");
+    }
+    Ok(())
+}
+
+fn terminate_spawned_daemon(child: &mut Child) -> Result<()> {
+    if child
+        .try_wait()
+        .context("Failed to inspect spawned homerund process")?
+        .is_some()
+    {
+        return Ok(());
+    }
+    terminate_daemon_process_tree(child)?;
+    child
+        .wait()
+        .context("Failed to reap timed-out homerund process")?;
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -82,7 +151,9 @@ pub async fn start_daemon() -> Result<()> {
 
     let binary = which::which("homerund")
         .context("homerund not found in PATH. Install it or add it to your PATH.")?;
-    std::process::Command::new(&binary)
+    let mut command = Command::new(&binary);
+    configure_spawned_daemon(&mut command);
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -97,9 +168,26 @@ pub async fn start_daemon() -> Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if client.health().await.is_ok() {
+            // The daemon now owns its own lifetime. Dropping the Child handle is
+            // intentional here; only failed starts are cleaned up by this CLI.
             return Ok(());
         }
+
+        if let Some(status) = child
+            .try_wait()
+            .context("Failed to inspect spawned homerund process")?
+        {
+            bail!(
+                "Daemon exited before becoming healthy ({status}) — check logs at ~/.homerun/logs/"
+            );
+        }
+
         if tokio::time::Instant::now() >= deadline {
+            if let Err(cleanup_error) = terminate_spawned_daemon(&mut child) {
+                bail!(
+                    "Daemon failed to start within 5 seconds and cleanup failed: {cleanup_error:#}"
+                );
+            }
             bail!("Daemon failed to start within 5 seconds — check logs at ~/.homerun/logs/");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -220,6 +308,45 @@ mod tests {
             classify_shutdown_error("Daemon is installed as a system service", true),
             ShutdownErrorDisposition::ServiceManaged
         );
+    }
+
+    #[test]
+    fn cleanup_accepts_already_exited_child() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        terminate_spawned_daemon(&mut child).unwrap();
+    }
+
+    #[test]
+    fn cleanup_terminates_running_child() {
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 30"]);
+            configure_spawned_daemon(&mut command);
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
+            configure_spawned_daemon(&mut command);
+            command
+        };
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        terminate_spawned_daemon(&mut child).unwrap();
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[cfg(unix)]
