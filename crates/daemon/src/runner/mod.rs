@@ -1376,7 +1376,6 @@ impl RunnerManager {
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
             bail!("Runner '{id}' already has a start operation in progress");
         }
-        drop(creation_operations);
         if desired {
             self.desired_running.write().await.insert(id.clone());
         }
@@ -1385,14 +1384,18 @@ impl RunnerManager {
             self.runners.write().await.remove(&id);
             if desired {
                 self.desired_running.write().await.remove(&id);
+                creation_operations.starting.remove(&id);
             }
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
             drop(_persistence_guard);
-            if desired {
-                self.finish_start_operation(&id).await;
-            }
+            drop(creation_operations);
             return Err(error).context("persisting newly-created runner");
         }
+
+        // Keep lifecycle admission locked through the durable write. Shutdown
+        // therefore cannot overtake a creation that it failed to reject.
+        drop(_persistence_guard);
+        drop(creation_operations);
         Ok(runner)
     }
 
