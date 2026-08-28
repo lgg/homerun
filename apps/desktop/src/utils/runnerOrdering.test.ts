@@ -42,10 +42,11 @@ describe("runner activity ordering", () => {
     const recent = runner("recent", "online", { completedAt: "2026-08-28T11:59:59Z" });
     const old = runner("old", "online", { completedAt: "2026-08-27T12:00:00Z" });
     const offline = runner("offline", "offline", { completedAt: "2026-08-28T12:01:00Z" });
+    const error = runner("error", "error", { completedAt: "2026-08-28T12:02:00Z" });
 
     expect(
-      sortRunnersByActivity([offline, old, recent, busy]).map((item) => item.config.name),
-    ).toEqual(["busy", "recent", "old", "offline"]);
+      sortRunnersByActivity([offline, error, old, recent, busy]).map((item) => item.config.name),
+    ).toEqual(["busy", "recent", "old", "error", "offline"]);
   });
 
   it("uses runner start time when no job activity has been recorded yet", () => {
