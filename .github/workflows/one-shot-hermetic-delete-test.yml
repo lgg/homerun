@@ -1,0 +1,66 @@
+name: One-shot hermetic delete test
+
+on:
+  push:
+    branches: [test/hermetic-delete-endpoint-2026-08-28]
+    paths:
+      - .github/workflows/one-shot-hermetic-delete-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Make delete endpoint test hermetic
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/daemon/src/api/runners.rs')
+          text = path.read_text()
+          old = '''        // Create
+        let app = create_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runners")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{\\"repo_full_name\\":\\"aGallea/gifted\\"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let runner: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let id = runner["config"]["id"].as_str().unwrap();
+'''
+          new = '''        // Seed an unconfigured runner directly. Creating through POST /runners
+        // intentionally starts registration in the background, which makes this
+        // DELETE endpoint test depend on runner downloads and GitHub network timing.
+        let runner = state
+            .runner_manager
+            .create("aGallea/gifted", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one delete-test setup block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+      - name: Format and verify targeted test
+        run: |
+          cargo fmt --all
+          cargo test --locked -p homerund api::runners::tests::test_delete_runner -- --exact
+      - name: Commit patch and remove one-shot workflow
+        run: |
+          rm .github/workflows/one-shot-hermetic-delete-test.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: isolate delete endpoint from runner startup"
+          git push origin HEAD:test/hermetic-delete-endpoint-2026-08-28
