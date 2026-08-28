@@ -23,6 +23,8 @@ function makePrefs(overrides?: Partial<Preferences>): Preferences {
     scan_labels: [],
     workspace_path: null,
     auto_scan: false,
+    hide_offline_runners_in_mini_view: false,
+    sort_runners_by_activity: false,
     ...overrides,
   };
 }
@@ -135,242 +137,175 @@ describe("useNotifications", () => {
     });
   });
 
-  it("does not notify online when transitioning from busy (job finished)", async () => {
-    const prefs = makePrefs();
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    const updated = [makeRunner({ name: "r1", state: "online" })];
-    rerender({ runners: updated, prefs });
-
-    // Give time for any async notification
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockInvoke).not.toHaveBeenCalled();
-  });
-
-  it("does not send status notifications when notify_status_changes is false", async () => {
+  it("respects notify_status_changes=false", async () => {
     const prefs = makePrefs({ notify_status_changes: false });
-    const initial = [makeRunner({ name: "r1", state: "online" })];
+    const initial = [makeRunner({ name: "r1", state: "offline" })];
     const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
       initialProps: { runners: initial, prefs },
     });
-
-    const updated = [makeRunner({ name: "r1", state: "offline" })];
-    rerender({ runners: updated, prefs });
-
-    await new Promise((r) => setTimeout(r, 50));
+    rerender({ runners: [makeRunner({ name: "r1", state: "online" })], prefs });
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mockInvoke).not.toHaveBeenCalled();
   });
 
-  it("sends Job Completed notification", async () => {
-    const prefs = makePrefs();
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    const updated = [runnerWithJob("r1", "online", true, "build", "2026-01-01T00:00:00Z")];
-    rerender({ runners: updated, prefs });
-
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
-        title: "Job Completed",
-        body: "build on r1 passed in 1m 30s",
-        icon_path: "/resolved/resources/notifications/active.png",
-      });
-    });
-  });
-
-  it("sends Job Failed notification", async () => {
-    const prefs = makePrefs();
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    const updated = [runnerWithJob("r1", "online", false, "deploy", "2026-01-01T00:00:00Z")];
-    rerender({ runners: updated, prefs });
-
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
-        title: "Job Failed",
-        body: "deploy on r1 failed",
-        icon_path: "/resolved/resources/notifications/error.png",
-      });
-    });
-  });
-
-  it("does not send job notifications when notify_job_completions is false", async () => {
-    const prefs = makePrefs({ notify_job_completions: false });
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    const updated = [runnerWithJob("r1", "online", true, "build", "2026-01-01T00:00:00Z")];
-    rerender({ runners: updated, prefs });
-
-    await new Promise((r) => setTimeout(r, 50));
-    // Only the busy->online status notification should have fired, not job
-    const jobCalls = mockInvoke.mock.calls.filter(
-      (c: unknown[]) => (c[1] as Record<string, string>)?.title === "Job Completed",
-    );
-    expect(jobCalls).toHaveLength(0);
-  });
-
-  it("sends Job Completed when counter increases even if job key was briefly null", async () => {
-    const prefs = makePrefs();
-    // Runner is busy with jobs_completed=0
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    // Job completed (counter increased) and runner is back online with last_completed_job
-    const completed = runnerWithJob("r1", "online", true, "test", "2026-02-01T00:00:00Z", 30);
-    rerender({ runners: [completed], prefs });
-
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
-        title: "Job Completed",
-        body: "test on r1 passed in 30s",
-        icon_path: "/resolved/resources/notifications/active.png",
-      });
-    });
-  });
-
-  it("does not double-notify when counter stays the same across polls", async () => {
-    const prefs = makePrefs();
-    const initial = [makeRunner({ name: "r1", state: "busy" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    // First completion
-    const completed = runnerWithJob("r1", "online", true, "test", "2026-02-01T00:00:00Z", 30);
-    rerender({ runners: [completed], prefs });
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledTimes(1);
-    });
-
-    // Same data on next poll — should NOT notify again
-    mockInvoke.mockClear();
-    mockResolveResource.mockImplementation((path: string) => Promise.resolve(`/resolved/${path}`));
-    rerender({ runners: [completed], prefs });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockInvoke).not.toHaveBeenCalled();
-  });
-
-  it("sends Runner Deleted notification when runner disappears", async () => {
-    const prefs = makePrefs();
-    const initial = [
-      makeRunner({ name: "r1", state: "online" }),
-      makeRunner({ name: "r2", state: "offline" }),
-    ];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    // Remove r2
-    const updated = [makeRunner({ name: "r1", state: "online" })];
-    rerender({ runners: updated, prefs });
-
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
-        title: "Runner Deleted",
-        body: "r2 was removed",
-        icon_path: "/resolved/resources/notifications/offline.png",
-      });
-    });
-  });
-
-  it("sends Runner Deleted when the final runner disappears", async () => {
-    const prefs = makePrefs();
-    const initial = [makeRunner({ name: "last-runner", state: "online" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    rerender({ runners: [], prefs });
-
-    await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
-        title: "Runner Deleted",
-        body: "last-runner was removed",
-        icon_path: "/resolved/resources/notifications/offline.png",
-      });
-    });
-  });
-
-  it("does not send deleted notification when notify_status_changes is false", async () => {
-    const prefs = makePrefs({ notify_status_changes: false });
-    const initial = [makeRunner({ name: "r1" }), makeRunner({ name: "r2" })];
-    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
-      initialProps: { runners: initial, prefs },
-    });
-
-    rerender({ runners: [makeRunner({ name: "r1" })], prefs });
-
-    await new Promise((r) => setTimeout(r, 50));
-    expect(mockInvoke).not.toHaveBeenCalled();
-  });
-
-  it("handles notification send failure gracefully", async () => {
-    mockResolveResource.mockRejectedValue(new Error("resource not found"));
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("does not notify for transitional states", async () => {
     const prefs = makePrefs();
     const initial = [makeRunner({ name: "r1", state: "offline" })];
     const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
       initialProps: { runners: initial, prefs },
     });
-
-    const updated = [makeRunner({ name: "r1", state: "online" })];
-    rerender({ runners: updated, prefs });
-
-    await vi.waitFor(() => {
-      expect(consoleSpy).toHaveBeenCalled();
-    });
-    consoleSpy.mockRestore();
+    rerender({ runners: [makeRunner({ name: "r1", state: "creating" })], prefs });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
-});
 
-describe("formatDuration (via Job Completed body)", () => {
-  it("formats seconds only", async () => {
+  it("does not notify for removed runners", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", state: "online" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({ runners: [], prefs });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it("notifies when a job completes successfully", async () => {
     const prefs = makePrefs();
     const initial = [makeRunner({ name: "r1", state: "busy" })];
     const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
       initialProps: { runners: initial, prefs },
     });
-
-    const runner = runnerWithJob("r1", "online", true, "test", "2026-01-01T00:00:00Z", 45);
-    rerender({ runners: [runner], prefs });
-
+    const completed = [
+      runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z", 65),
+    ];
+    rerender({ runners: completed, prefs });
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith(
-        "send_notification",
-        expect.objectContaining({ body: "test on r1 passed in 45s" }),
-      );
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
+        title: "Job Completed",
+        body: "Build completed on r1 in 1m 5s",
+        icon_path: "/resolved/resources/notifications/success.png",
+      });
     });
   });
 
-  it("formats exact minutes", async () => {
+  it("notifies when a job fails", async () => {
     const prefs = makePrefs();
     const initial = [makeRunner({ name: "r1", state: "busy" })];
     const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
       initialProps: { runners: initial, prefs },
     });
-
-    const runner = runnerWithJob("r1", "online", true, "test", "2026-01-01T00:00:00Z", 120);
-    rerender({ runners: [runner], prefs });
-
+    const completed = [runnerWithJob("r1", "online", false, "Test", "2026-08-28T12:00:00Z", 7)];
+    rerender({ runners: completed, prefs });
     await vi.waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith(
-        "send_notification",
-        expect.objectContaining({ body: "test on r1 passed in 2m" }),
-      );
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", {
+        title: "Job Failed",
+        body: "Test failed on r1 after 7s",
+        icon_path: "/resolved/resources/notifications/failure.png",
+      });
     });
+  });
+
+  it("respects notify_job_completions=false", async () => {
+    const prefs = makePrefs({ notify_job_completions: false });
+    const initial = [makeRunner({ name: "r1", state: "busy" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({ runners: [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z")], prefs });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it("does not re-notify for the same completed job", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", state: "busy" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    const completed = [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z")];
+    rerender({ runners: completed, prefs });
+    await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledTimes(2));
+    mockInvoke.mockClear();
+    rerender({ runners: completed, prefs });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it("detects distinct completed jobs by timestamp", async () => {
+    const prefs = makePrefs();
+    const first = [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z")];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: first, prefs },
+    });
+    mockInvoke.mockClear();
+    const second = [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:05:00Z")];
+    rerender({ runners: second, prefs });
+    await vi.waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", expect.objectContaining({
+        title: "Job Completed",
+      }));
+    });
+  });
+
+  it("formats minute-only durations cleanly", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", state: "busy" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({
+      runners: [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z", 120)],
+      prefs,
+    });
+    await vi.waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", expect.objectContaining({
+        body: "Build completed on r1 in 2m",
+      }));
+    });
+  });
+
+  it("formats hour durations cleanly", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", state: "busy" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({
+      runners: [runnerWithJob("r1", "online", true, "Build", "2026-08-28T12:00:00Z", 3660)],
+      prefs,
+    });
+    await vi.waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", expect.objectContaining({
+        body: "Build completed on r1 in 1h 1m",
+      }));
+    });
+  });
+
+  it("uses display name in notification body when configured", async () => {
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", displayName: "Worker A", state: "offline" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({ runners: [makeRunner({ name: "r1", displayName: "Worker A", state: "online" })], prefs });
+    await vi.waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_notification", expect.objectContaining({
+        body: "Worker A is now online and ready for jobs",
+      }));
+    });
+  });
+
+  it("reports notification errors without throwing", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockInvoke.mockRejectedValueOnce(new Error("notification failed"));
+    const prefs = makePrefs();
+    const initial = [makeRunner({ name: "r1", state: "offline" })];
+    const { rerender } = renderHook(({ runners, prefs }) => useNotifications(runners, prefs), {
+      initialProps: { runners: initial, prefs },
+    });
+    rerender({ runners: [makeRunner({ name: "r1", state: "online" })], prefs });
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+    consoleError.mockRestore();
   });
 });
