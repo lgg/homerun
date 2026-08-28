@@ -16,6 +16,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Preserve literal replacement text
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/apply_runtime_runner_display_patch.py')
+          data = path.read_text()
+          old = 'updated, actual = re.subn(pattern, replacement, data, count=count, flags=re.S)'
+          new = 'updated, actual = re.subn(pattern, lambda _match: replacement, data, count=count, flags=re.S)'
+          if old not in data:
+              raise SystemExit('regex replacement helper was not found')
+          path.write_text(data.replace(old, new, 1))
+          PY
       - name: Apply audited patch
         run: python3 .github/apply_runtime_runner_display_patch.py
       - name: Commit audited changes
