@@ -225,9 +225,7 @@ mod tests {
 
     #[test]
     fn test_missing_home_is_reported_without_panicking() {
-        let error = Config::from_home(None)
-            .err()
-            .expect("missing HOME should fail");
+        let error = Config::from_home(None).expect_err("missing HOME should fail");
         assert!(error
             .to_string()
             .contains("Cannot determine home directory"));
