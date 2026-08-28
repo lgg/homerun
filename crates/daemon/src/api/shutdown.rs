@@ -97,7 +97,7 @@ pub async fn shutdown_daemon(
         }
 
         if stop_failed {
-            // Do not exit while a runner may still be alive. Re-open lifecycle
+            // Do not exit while any runner may still be alive. Re-open lifecycle
             // admission and restore any successfully stopped desired runners;
             // the CLI will observe that the daemon is still healthy and report
             // the shutdown timeout instead of claiming success.
