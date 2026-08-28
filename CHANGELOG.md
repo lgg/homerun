@@ -9,6 +9,14 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.10.1](https://github.com/lgg/homerun/compare/v0.10.0...v0.10.1) (2026-08-28)
+
+### Bug Fixes
+
+* harden repository validation after the 0.10.0 release
+* make coverage badge updates repository-native and remove the external gist dependency
+* harden release workflow dispatch and recovery behavior
+
 ## [0.10.0](https://github.com/lgg/homerun/compare/v0.8.5...v0.10.0) (2026-08-11)
 
 
