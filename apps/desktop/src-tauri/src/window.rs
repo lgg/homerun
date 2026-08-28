@@ -277,17 +277,6 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
     show_mini_window(app, &win)
 }
 
-/// Re-clamp the mini window after content-driven resizes or display changes.
-pub fn ensure_mini_window_visible(app: &AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window(MINI_LABEL) {
-        keep_mini_window_on_screen(&win)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    } else {
-        Ok(())
-    }
-}
-
 /// Hide all windows (main + mini) so only the tray icon remains.
 pub fn hide_all_windows(app: &AppHandle) -> Result<(), String> {
     if let Some(main) = app.get_webview_window(MAIN_LABEL) {
