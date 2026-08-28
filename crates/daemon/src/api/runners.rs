@@ -465,24 +465,15 @@ mod tests {
     async fn test_delete_runner() {
         let state = AppState::new_test_authenticated();
 
-        // Create
-        let app = create_router(state.clone());
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/runners")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"repo_full_name":"aGallea/gifted"}"#))
-                    .unwrap(),
-            )
+        // Seed an unconfigured runner directly. Creating through POST /runners
+        // intentionally starts registration in the background, which makes this
+        // DELETE endpoint test depend on runner downloads and GitHub network timing.
+        let runner = state
+            .runner_manager
+            .create("aGallea/gifted", None, None, None, None, None)
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let runner: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let id = runner["config"]["id"].as_str().unwrap();
+        let id = runner.config.id;
 
         // Delete
         let app = create_router(state.clone());

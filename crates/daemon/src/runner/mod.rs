@@ -2065,6 +2065,23 @@ impl RunnerManager {
     async fn do_register_and_start(&self, id: &str, auth_token: &str) -> Result<()> {
         self.set_auth_token(Some(auth_token.to_string())).await;
 
+        // API unit tests use a dedicated sentinel token. Do not let their
+        // background auto-start tasks download/configure a real GitHub Actions
+        // runner: parallel tests would otherwise contend on the process-wide
+        // runner download lock and keep lifecycle reservations for up to a minute.
+        // This branch is compiled only in tests and cannot affect production.
+        #[cfg(test)]
+        if auth_token == "ghp_test_token" {
+            self.update_state_with_error(
+                id,
+                RunnerState::Error,
+                Some("Runner startup skipped for test authentication".to_string()),
+            )
+            .await?;
+            self.emit_state_event(id, "error");
+            return Ok(());
+        }
+
         let runner = self
             .get(id)
             .await
@@ -3419,6 +3436,30 @@ mod tests {
 
         // A later shutdown can install a fresh barrier normally.
         assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_test_auth_start_skips_external_runner_setup() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        manager
+            .register_and_start(&id, "ghp_test_token")
+            .await
+            .unwrap();
+
+        let runner = manager.get(&id).await.unwrap();
+        assert_eq!(runner.state, RunnerState::Error);
+        assert!(!manager.has_active_process(&id).await);
+        assert!(runner
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("skipped for test authentication"));
     }
 
     #[tokio::test]
