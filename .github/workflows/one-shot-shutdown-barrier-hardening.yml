@@ -22,279 +22,115 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Harden barrier
+      - name: Harden manager barrier
         shell: python
         run: |
+          import re
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
+          path = Path("crates/daemon/src/runner/mod.rs")
+          text = path.read_text()
+
+          def sub_once(pattern, replacement):
+              global text
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
               if count != 1:
-                  raise SystemExit(f"Expected one match in {path}, found {count}: {old[:100]!r}")
-              p.write_text(text.replace(old, new, 1))
+                  raise SystemExit(f"Expected one regex match, found {count}: {pattern[:120]!r}")
+              text = updated
 
-          mod = "crates/daemon/src/runner/mod.rs"
-
-          replace_once(
-              mod,
-              '''        let mut creation_operations = if desired {
-              let operations = self.lifecycle_operations.lock().await;
-              if operations.shutting_down {
+          sub_once(
+              r"        let mut creation_operations = if desired \{.*?        \};\n\n        let _persistence_guard",
+              '''        // Every creation participates in the lifecycle barrier so shutdown
+              // cannot race a persistence transaction. Desired-running creation also
+              // reserves its start before releasing this mutex.
+              let mut creation_operations = self.lifecycle_operations.lock().await;
+              if creation_operations.shutting_down {
                   let _ = std::fs::remove_dir_all(&runner.config.work_dir);
                   bail!("Daemon shutdown is in progress");
               }
-              Some(operations)
-          } else {
-              None
-          };
-          ''',
-              '''        // Every creation participates in the lifecycle barrier so shutdown
-          // cannot race a persistence transaction. Desired-running creation also
-          // reserves its start before releasing this mutex.
-          let mut creation_operations = self.lifecycle_operations.lock().await;
-          if creation_operations.shutting_down {
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              bail!("Daemon shutdown is in progress");
-          }
-          ''',
+
+              let _persistence_guard''',
           )
 
-          replace_once(
-              mod,
-              '''        if let Some(operations) = creation_operations.as_mut() {
-              if !operations.starting.insert(id.clone()) {
+          sub_once(
+              r"        if let Some\(operations\) = creation_operations\.as_mut\(\) \{.*?        drop\(creation_operations\);",
+              '''        if desired && !creation_operations.starting.insert(id.clone()) {
                   self.runners.write().await.remove(&id);
                   let _ = std::fs::remove_dir_all(&runner.config.work_dir);
                   bail!("Runner '{id}' already has a start operation in progress");
               }
-          }
-          drop(creation_operations);
-          ''',
-              '''        if desired && !creation_operations.starting.insert(id.clone()) {
-              self.runners.write().await.remove(&id);
-              let _ = std::fs::remove_dir_all(&runner.config.work_dir);
-              bail!("Runner '{id}' already has a start operation in progress");
-          }
-          drop(creation_operations);
-          ''',
+              drop(creation_operations);''',
           )
 
-          replace_once(
-              mod,
-              '''    /// Wait until every start admitted before the shutdown barrier has
-          /// finished. New starts cannot appear after `begin_shutdown_operation`.
-          pub(crate) async fn wait_for_start_operations_to_finish(&self) {
-              loop {
-                  let pending = self.lifecycle_operations.lock().await.starting.len();
-                  if pending == 0 {
-                      break;
-                  }
-                  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-              }
-          }
-          ''',
+          sub_once(
+              r"    /// Wait until every start admitted before the shutdown barrier has.*?    pub\(crate\) async fn begin_stop_operation",
               '''    /// Wait for all lifecycle mutations admitted before the shutdown barrier.
-          /// New mutations cannot appear after `begin_shutdown_operation`.
-          pub(crate) async fn wait_for_lifecycle_operations_to_finish(&self) {
-              loop {
-                  let operations = self.lifecycle_operations.lock().await;
-                  let pending = operations.starting.len()
-                      + operations.stopping.len()
-                      + operations.updating.len()
-                      + operations.deleting.len();
-                  drop(operations);
-                  if pending == 0 {
-                      break;
+              /// New mutations cannot appear after `begin_shutdown_operation`.
+              pub(crate) async fn wait_for_lifecycle_operations_to_finish(&self) {
+                  loop {
+                      let operations = self.lifecycle_operations.lock().await;
+                      let pending = operations.starting.len()
+                          + operations.stopping.len()
+                          + operations.updating.len()
+                          + operations.deleting.len();
+                      drop(operations);
+                      if pending == 0 {
+                          break;
+                      }
+                      tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                   }
-                  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
               }
-          }
-          ''',
+
+              pub(crate) async fn begin_stop_operation''',
           )
 
-          replace_once(
-              mod,
-              '''    pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if operations.deleting.contains(id) {
-          ''',
-              '''    pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if operations.shutting_down {
+          for signature in [
+              r"pub\(crate\) async fn begin_stop_operation\(&self, id: &str\) -> Result<\(\)>",
+              r"async fn begin_update_operation\(&self, id: &str\) -> Result<\(\)>",
+              r"async fn begin_delete_operation\(&self, id: &str\) -> Result<\(\)>",
+          ]:
+              pattern = rf"(    {signature} \{{\n        let mut operations = self\.lifecycle_operations\.lock\(\)\.await;\n)"
+              replacement = r'''\1        if operations.shutting_down {
                   bail!("Daemon shutdown is in progress");
               }
-              if operations.deleting.contains(id) {
-          ''',
-          )
-
-          replace_once(
-              mod,
-              '''    async fn begin_update_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if operations.deleting.contains(id) {
-          ''',
-              '''    async fn begin_update_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if operations.shutting_down {
-                  bail!("Daemon shutdown is in progress");
-              }
-              if operations.deleting.contains(id) {
-          ''',
-          )
-
-          replace_once(
-              mod,
-              '''    async fn begin_delete_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if !self.runners.read().await.contains_key(id) {
-          ''',
-              '''    async fn begin_delete_operation(&self, id: &str) -> Result<()> {
-              let mut operations = self.lifecycle_operations.lock().await;
-              if operations.shutting_down {
-                  bail!("Daemon shutdown is in progress");
-              }
-              if !self.runners.read().await.contains_key(id) {
-          ''',
-          )
-
-          replace_once(
-              mod,
-              '''        assert!(tokio::time::timeout(
-              std::time::Duration::from_millis(25),
-              manager.wait_for_start_operations_to_finish(),
-          )
-          .await
-          .is_err());
-
-          manager.finish_start_operation(&id).await;
-          tokio::time::timeout(
-              std::time::Duration::from_secs(1),
-              manager.wait_for_start_operations_to_finish(),
-          )
-          .await
-          .unwrap();
-          ''',
-              '''        assert!(tokio::time::timeout(
-              std::time::Duration::from_millis(25),
-              manager.wait_for_lifecycle_operations_to_finish(),
-          )
-          .await
-          .is_err());
-
-          manager.finish_start_operation(&id).await;
-          tokio::time::timeout(
-              std::time::Duration::from_secs(1),
-              manager.wait_for_lifecycle_operations_to_finish(),
-          )
-          .await
-          .unwrap();
-          ''',
-          )
-
-          # Verify all user-facing lifecycle mutations are rejected after barrier.
-          marker = '''    #[tokio::test]
-          async fn test_shutdown_waits_for_previously_admitted_start() {
           '''
-          insert = '''    #[tokio::test]
-          async fn test_shutdown_barrier_rejects_other_mutations() {
-              let manager = create_test_manager();
-              let runner = manager
-                  .create("owner/repo", None, None, None, None, None)
-                  .await
-                  .unwrap();
-              let id = runner.config.id;
+              updated, count = re.subn(pattern, replacement, text, count=1)
+              if count != 1:
+                  raise SystemExit(f"Expected one lifecycle admission match, found {count}: {signature}")
+              text = updated
 
-              manager.begin_shutdown_operation().await.unwrap();
-              assert!(manager.begin_stop_operation(&id).await.is_err());
-              assert!(manager
-                  .begin_update_operation(&id)
-                  .await
-                  .is_err());
-              assert!(manager.begin_delete_operation(&id).await.is_err());
-              assert!(manager
-                  .create("owner/repo", None, None, None, None, None)
-                  .await
-                  .is_err());
-          }
+          text = text.replace(
+              "wait_for_start_operations_to_finish",
+              "wait_for_lifecycle_operations_to_finish",
+          )
 
-          ''' + marker
-          replace_once(mod, marker, insert)
-
-          shutdown = "crates/daemon/src/api/shutdown.rs"
-          replace_once(
-              shutdown,
-              '''    let runners = state.runner_manager.list().await;
-          let mut active_count = admitted_starts;
-          for runner in &runners {
-              let transitional = !matches!(
-                  runner.state,
-                  crate::runner::state::RunnerState::Offline | crate::runner::state::RunnerState::Error
-              );
-              if transitional
-                  || state
-                      .runner_manager
-                      .has_active_process(&runner.config.id)
+          marker = '''    #[tokio::test]
+              async fn test_shutdown_waits_for_previously_admitted_start() {
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit("shutdown wait test marker missing or duplicated")
+          extra_test = '''    #[tokio::test]
+              async fn test_shutdown_barrier_rejects_other_mutations() {
+                  let manager = create_test_manager();
+                  let runner = manager
+                      .create("owner/repo", None, None, None, None, None)
                       .await
-              {
-                  active_count = active_count.max(admitted_starts.max(1));
-              }
-          }
-          ''',
-              '''    let runners = state.runner_manager.list().await;
-          let mut observed_active = 0usize;
-          for runner in &runners {
-              let transitional = !matches!(
-                  runner.state,
-                  crate::runner::state::RunnerState::Offline | crate::runner::state::RunnerState::Error
-              );
-              if transitional
-                  || state
-                      .runner_manager
-                      .has_active_process(&runner.config.id)
+                      .unwrap();
+                  let id = runner.config.id;
+
+                  manager.begin_shutdown_operation().await.unwrap();
+                  assert!(manager.begin_stop_operation(&id).await.is_err());
+                  assert!(manager.begin_update_operation(&id).await.is_err());
+                  assert!(manager.begin_delete_operation(&id).await.is_err());
+                  assert!(manager
+                      .create("owner/repo", None, None, None, None, None)
                       .await
-              {
-                  observed_active += 1;
+                      .is_err());
               }
-          }
-          // An admitted start may still be Offline/Error before its async start task
-          // publishes Registering, so keep the larger of observed and reserved counts.
-          let active_count = observed_active.max(admitted_starts);
-          ''',
-          )
 
-          replace_once(
-              shutdown,
-              '''        state
-              .runner_manager
-              .wait_for_start_operations_to_finish()
-              .await;
-          ''',
-              '''        state
-              .runner_manager
-              .wait_for_lifecycle_operations_to_finish()
-              .await;
-          ''',
-          )
-
-          replace_once(
-              shutdown,
-              '''                stop_futures.push(async move {
-                  if let Err(e) = manager.stop_process_preserving_intent(&id).await {
-                      tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
-                  }
-              });
-          ''',
-              '''                stop_futures.push(async move {
-                  // The shutdown barrier has drained all prior mutations and blocks
-                  // new ones, so no second stop reservation is needed here.
-                  if let Err(e) = manager.stop_process_internal(&id, false).await {
-                      tracing::warn!("Failed to stop runner {} for shutdown: {}", id, e);
-                  }
-              });
-          ''',
-          )
+          '''
+          text = text.replace(marker, extra_test + marker, 1)
+          path.write_text(text)
 
       - name: Format Rust changes
         run: cargo fmt --all
