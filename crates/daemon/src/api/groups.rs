@@ -52,38 +52,9 @@ pub async fn create_batch(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    // Creation persisted desired-running intent atomically. Reserve every start
-    // before spawning any work so the batch response cannot publish unadmitted runners.
-    let mut reserved: Vec<String> = Vec::with_capacity(runners.len());
+    // Each desired-running runner is returned with its start reservation held.
     for runner in &runners {
         let runner_id = runner.config.id.clone();
-        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
-            for reserved_id in &reserved {
-                state
-                    .runner_manager
-                    .finish_start_operation(reserved_id)
-                    .await;
-            }
-            let mut cleanup_errors = Vec::new();
-            for created in &runners {
-                if let Err(cleanup) = state.runner_manager.delete(&created.config.id).await {
-                    cleanup_errors.push(format!("{}: {cleanup}", created.config.id));
-                }
-            }
-            let cleanup_detail = if cleanup_errors.is_empty() {
-                String::new()
-            } else {
-                format!("; cleanup failures: {}", cleanup_errors.join(", "))
-            };
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to admit batch runner start: {error}{cleanup_detail}"),
-            ));
-        }
-        reserved.push(runner_id);
-    }
-
-    for runner_id in reserved {
         let manager = state.runner_manager.clone();
         let token = token.clone();
         tokio::spawn(async move {
@@ -421,38 +392,9 @@ pub async fn scale_group(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Scale-up creation persisted intent atomically. Reserve every new runner
-    // before spawning any of them so the returned count is fully admitted.
-    let mut reserved: Vec<String> = Vec::with_capacity(response.added.len());
+    // Added desired-running runners already hold start reservations.
     for runner in &response.added {
         let runner_id = runner.config.id.clone();
-        if let Err(error) = state.runner_manager.begin_start_operation(&runner_id).await {
-            for reserved_id in &reserved {
-                state
-                    .runner_manager
-                    .finish_start_operation(reserved_id)
-                    .await;
-            }
-            let mut cleanup_errors = Vec::new();
-            for added in &response.added {
-                if let Err(cleanup) = state.runner_manager.delete(&added.config.id).await {
-                    cleanup_errors.push(format!("{}: {cleanup}", added.config.id));
-                }
-            }
-            let cleanup_detail = if cleanup_errors.is_empty() {
-                String::new()
-            } else {
-                format!("; cleanup failures: {}", cleanup_errors.join(", "))
-            };
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to admit scaled runner start: {error}{cleanup_detail}"),
-            ));
-        }
-        reserved.push(runner_id);
-    }
-
-    for runner_id in reserved {
         let manager = state.runner_manager.clone();
         let token = token
             .clone()

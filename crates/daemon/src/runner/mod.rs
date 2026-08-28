@@ -98,6 +98,7 @@ struct LifecycleOperations {
     stopping: HashSet<String>,
     updating: HashSet<String>,
     deleting: HashSet<String>,
+    shutting_down: bool,
 }
 
 #[derive(Clone)]
@@ -1334,6 +1335,21 @@ impl RunnerManager {
             estimated_job_duration_secs: None,
         };
 
+        // Desired-running creation also reserves the start under the same
+        // lifecycle mutex used by daemon shutdown. This closes the gap where
+        // shutdown could begin after persistence but before the API reserved
+        // the runner's start operation.
+        let mut creation_operations = if desired {
+            let operations = self.lifecycle_operations.lock().await;
+            if operations.shutting_down {
+                let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                bail!("Daemon shutdown is in progress");
+            }
+            Some(operations)
+        } else {
+            None
+        };
+
         let _persistence_guard = self.persistence_lock.lock().await;
         {
             let mut runners = self.runners.write().await;
@@ -1357,6 +1373,14 @@ impl RunnerManager {
             }
             runners.insert(id.clone(), runner.clone());
         }
+        if let Some(operations) = creation_operations.as_mut() {
+            if !operations.starting.insert(id.clone()) {
+                self.runners.write().await.remove(&id);
+                let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+                bail!("Runner '{id}' already has a start operation in progress");
+            }
+        }
+        drop(creation_operations);
         if desired {
             self.desired_running.write().await.insert(id.clone());
         }
@@ -1367,6 +1391,10 @@ impl RunnerManager {
                 self.desired_running.write().await.remove(&id);
             }
             let _ = std::fs::remove_dir_all(&runner.config.work_dir);
+            drop(_persistence_guard);
+            if desired {
+                self.finish_start_operation(&id).await;
+            }
             return Err(error).context("persisting newly-created runner");
         }
         Ok(runner)
@@ -1647,6 +1675,9 @@ impl RunnerManager {
 
     pub(crate) async fn begin_start_operation(&self, id: &str) -> Result<()> {
         let mut operations = self.lifecycle_operations.lock().await;
+        if operations.shutting_down {
+            bail!("Daemon shutdown is in progress");
+        }
         if operations.deleting.contains(id) {
             bail!("Runner '{id}' is being deleted");
         }
@@ -1667,6 +1698,30 @@ impl RunnerManager {
 
     pub(crate) async fn finish_start_operation(&self, id: &str) {
         self.lifecycle_operations.lock().await.starting.remove(id);
+    }
+
+    /// Atomically stop admitting new starts and return the number of starts
+    /// that were already admitted. Existing starts keep their reservation so
+    /// shutdown can wait for them before deciding which processes to stop.
+    pub(crate) async fn begin_shutdown_operation(&self) -> Result<usize> {
+        let mut operations = self.lifecycle_operations.lock().await;
+        if operations.shutting_down {
+            bail!("Daemon shutdown is already in progress");
+        }
+        operations.shutting_down = true;
+        Ok(operations.starting.len())
+    }
+
+    /// Wait until every start admitted before the shutdown barrier has
+    /// finished. New starts cannot appear after `begin_shutdown_operation`.
+    pub(crate) async fn wait_for_start_operations_to_finish(&self) {
+        loop {
+            let pending = self.lifecycle_operations.lock().await.starting.len();
+            if pending == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     pub(crate) async fn begin_stop_operation(&self, id: &str) -> Result<()> {
@@ -3274,6 +3329,53 @@ mod tests {
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].config.id, runner.config.id);
         assert!(persisted[0].was_running);
+
+        // Desired-running creation must return with its start already admitted.
+        assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 1);
+        manager.finish_start_operation(&runner.config.id).await;
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_barrier_rejects_new_starts() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 0);
+        let error = manager
+            .begin_start_operation(&runner.config.id)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("shutdown"));
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_waits_for_previously_admitted_start() {
+        let manager = create_test_manager();
+        let runner = manager
+            .create("owner/repo", None, None, None, None, None)
+            .await
+            .unwrap();
+        let id = runner.config.id;
+
+        manager.begin_start_operation(&id).await.unwrap();
+        assert_eq!(manager.begin_shutdown_operation().await.unwrap(), 1);
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(25),
+            manager.wait_for_start_operations_to_finish(),
+        )
+        .await
+        .is_err());
+
+        manager.finish_start_operation(&id).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            manager.wait_for_start_operations_to_finish(),
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

@@ -19,23 +19,52 @@ pub async fn shutdown_daemon(
 
     tracing::info!("Shutdown requested via API");
 
+    let admitted_starts = state
+        .runner_manager
+        .begin_shutdown_operation()
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": error.to_string() })),
+            )
+        })?;
+
     let runners = state.runner_manager.list().await;
-    let active_runners: Vec<_> = runners
-        .iter()
-        .filter(|r| {
-            r.state == crate::runner::state::RunnerState::Online
-                || r.state == crate::runner::state::RunnerState::Busy
-        })
-        .collect();
-    let active_count = active_runners.len();
+    let mut active_count = admitted_starts;
+    for runner in &runners {
+        let transitional = !matches!(
+            runner.state,
+            crate::runner::state::RunnerState::Offline | crate::runner::state::RunnerState::Error
+        );
+        if transitional
+            || state
+                .runner_manager
+                .has_active_process(&runner.config.id)
+                .await
+        {
+            active_count = active_count.max(admitted_starts.max(1));
+        }
+    }
 
     tokio::spawn(async move {
+        // A start admitted before the barrier is allowed to finish. Once all
+        // reservations drain, no later start can race process enumeration.
+        state
+            .runner_manager
+            .wait_for_start_operations_to_finish()
+            .await;
+
         let runners = state.runner_manager.list().await;
         let mut stop_futures = Vec::new();
         for runner in &runners {
-            if runner.state == crate::runner::state::RunnerState::Online
+            let active = runner.state == crate::runner::state::RunnerState::Online
                 || runner.state == crate::runner::state::RunnerState::Busy
-            {
+                || state
+                    .runner_manager
+                    .has_active_process(&runner.config.id)
+                    .await;
+            if active {
                 tracing::info!("Stopping runner {} for shutdown", runner.config.name);
                 let manager = state.runner_manager.clone();
                 let id = runner.config.id.clone();
