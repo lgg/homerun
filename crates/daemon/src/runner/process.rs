@@ -15,13 +15,10 @@ pub async fn configure_runner(
     name: &str,
     labels: &[String],
 ) -> Result<()> {
-    // Remove stale local config so the config script doesn't refuse to reconfigure
-    for file in &[".runner", ".credentials", ".credentials_rsaparams"] {
-        let path = runner_dir.join(file);
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
+    // Newer GitHub Actions runner versions may leave `.runner_migrated`
+    // instead of `.runner`. Keep all stale-config cleanup in one helper so
+    // every configure path handles the same complete set of files.
+    clean_runner_config(runner_dir);
 
     let labels_str = labels.join(",");
     let dir_str = runner_dir.to_string_lossy().to_string();
@@ -156,6 +153,29 @@ mod tests {
         .await;
         // Should fail because the config script doesn't exist
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_configure_runner_cleans_runner_migrated_before_configuring() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".runner_migrated"), "{}").unwrap();
+        std::fs::write(dir.path().join(".credentials"), "cred").unwrap();
+
+        let result = configure_runner(
+            dir.path(),
+            "https://github.com/test/repo",
+            "fake-token",
+            "test-runner",
+            &["self-hosted".to_string()],
+        )
+        .await;
+
+        // The missing config script still makes the call fail, but cleanup
+        // must happen first so a real config script would not reject stale
+        // migrated registration state.
+        assert!(result.is_err());
+        assert!(!dir.path().join(".runner_migrated").exists());
+        assert!(!dir.path().join(".credentials").exists());
     }
 
     #[tokio::test]
