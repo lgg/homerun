@@ -433,8 +433,9 @@ impl DaemonClient {
 
     #[cfg(unix)]
     fn default_socket_from_home(home: Option<PathBuf>) -> Result<Self, String> {
-        let home = home
-            .ok_or_else(|| "Cannot determine home directory for HomeRun daemon socket".to_string())?;
+        let home = home.ok_or_else(|| {
+            "Cannot determine home directory for HomeRun daemon socket".to_string()
+        })?;
         Ok(Self::new(home.join(".homerun/daemon.sock")))
     }
 
@@ -968,7 +969,6 @@ impl DaemonClient {
         Ok(read)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

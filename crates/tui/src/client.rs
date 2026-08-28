@@ -835,7 +835,9 @@ mod tests {
         let error = DaemonClient::default_socket_from_home(None)
             .err()
             .expect("missing HOME should fail");
-        assert!(error.to_string().contains("Cannot determine home directory"));
+        assert!(error
+            .to_string()
+            .contains("Cannot determine home directory"));
     }
 
     #[tokio::test]
