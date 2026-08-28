@@ -19,9 +19,9 @@ pub async fn shutdown_daemon(
 
     tracing::info!("Shutdown requested via API");
 
-    // Install the lifecycle barrier before observing runner state. New lifecycle
-    // mutations are rejected from this point onward; operations admitted before
-    // the barrier retain their reservations and are drained below.
+    // Install the lifecycle admission barrier before observing runner state. New
+    // lifecycle mutations are rejected from this point onward; operations admitted
+    // before the barrier retain their reservations and are drained below.
     let admitted_starts = state
         .runner_manager
         .begin_shutdown_operation()
