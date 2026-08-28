@@ -9,6 +9,14 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.10.2](https://github.com/lgg/homerun/compare/v0.10.1...v0.10.2) (2026-08-28)
+
+### Bug Fixes
+
+* keep Mini View inside connected monitor work areas and recover stale off-screen positions
+* show and focus Mini View successfully before hiding the main window
+* revalidate Mini View bounds after moves and dynamic content resizing
+
 ## [0.10.1](https://github.com/lgg/homerun/compare/v0.10.0...v0.10.1) (2026-08-28)
 
 ### Bug Fixes
