@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
-    window::Monitor, AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder,
+    window::Monitor, AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
 
 const MAIN_LABEL: &str = "main";
@@ -164,15 +164,12 @@ fn keep_mini_window_on_screen(win: &WebviewWindow) -> Result<bool, tauri::Error>
         }
     }
 
-    let had_visible_overlap = best_monitor
-        .as_ref()
-        .is_some_and(|(_, area)| *area > 0);
+    let had_visible_overlap = best_monitor.as_ref().is_some_and(|(_, area)| *area > 0);
 
     let target_monitor = if had_visible_overlap {
         best_monitor.map(|(monitor, _)| monitor)
     } else {
-        win.primary_monitor()?
-            .or_else(|| monitors.first().cloned())
+        win.primary_monitor()?.or_else(|| monitors.first().cloned())
     };
 
     let Some(target_monitor) = target_monitor else {
