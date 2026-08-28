@@ -1,0 +1,67 @@
+name: Prepare v0.11.0 Release
+
+on:
+  push:
+    branches:
+      - release/v0.11.0
+    paths:
+      - .github/workflows/prepare-v0.11.0.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Apply release metadata
+        run: python3 .github/prepare-v0.11.0.py
+
+      - name: Regenerate Cargo lockfiles
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Regenerate npm lockfile
+        working-directory: apps/desktop
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Verify release versions
+        run: |
+          set -euo pipefail
+          test "$(jq -r '.["."]' .release-please-manifest.json)" = "0.11.0"
+          test "$(jq -r '.version' apps/desktop/package.json)" = "0.11.0"
+          test "$(jq -r '.version' apps/desktop/src-tauri/tauri.conf.json)" = "0.11.0"
+          grep -A8 '^\[workspace.package\]$' Cargo.toml | grep -q '^version = "0.11.0"$'
+          grep -A8 '^\[package\]$' apps/desktop/src-tauri/Cargo.toml | grep -q '^version = "0.11.0"$'
+          grep -q '^## \[0.11.0\]' CHANGELOG.md
+
+      - name: Commit clean release preparation
+        run: |
+          set -euo pipefail
+          rm .github/prepare-v0.11.0.py .github/workflows/prepare-v0.11.0.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "No release changes produced"
+            exit 1
+          fi
+          git commit -m "chore(master): release 0.11.0"
+          git push
