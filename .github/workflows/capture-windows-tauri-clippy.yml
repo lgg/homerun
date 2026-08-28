@@ -22,11 +22,20 @@ jobs:
         with:
           components: clippy
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Prepare Tauri sidecar
+        working-directory: apps/desktop
+        run: npm run prepare-sidecar
+
       - name: Capture standalone Tauri clippy
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          & cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings 2>&1 | Tee-Object -FilePath windows-tauri-clippy.txt
+          & cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath windows-tauri-clippy.txt
           "cargo_exit_code=$LASTEXITCODE" | Add-Content -Path windows-tauri-clippy.txt
           exit 0
 
