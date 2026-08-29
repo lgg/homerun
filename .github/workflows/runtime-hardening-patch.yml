@@ -27,21 +27,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # 1) Graceful shutdown must never panic when OS signal registration fails.
+          def replace_slice(text: str, start_marker: str, end_marker: str, replacement: str, *, offset: int = 0) -> str:
+              start = text.index(start_marker, offset)
+              end = text.index(end_marker, start)
+              return text[:start] + replacement + text[end:]
+
+          # 1) Graceful shutdown must not panic when OS signal registration fails.
           path = Path("crates/daemon/src/server.rs")
           text = path.read_text()
-          old = '''        let shutdown_signal = async {
-              let mut sigterm =
-                  tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                      .expect("failed to register SIGTERM handler");
-              let sigint = tokio::signal::ctrl_c();
-              tokio::select! {
-                  _ = sigterm.recv() => tracing::info!("Received SIGTERM"),
-                  _ = sigint => tracing::info!("Received SIGINT"),
-              }
-          };
-          '''
-          new = '''        let mut sigterm =
+          bind_section = text.index("// --- Platform-specific: bind listener, serve, shutdown ---")
+          unix_server = text.index("        let server = axum::serve(listener, app);", bind_section)
+          unix_start = text.index("        let shutdown_signal = async {", unix_server)
+          unix_end = text.index("\n\n        server.with_graceful_shutdown", unix_start)
+          unix_replacement = '''        let mut sigterm =
               tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
           let shutdown_signal = async move {
               let sigint = tokio::signal::ctrl_c();
@@ -58,31 +56,23 @@ jobs:
                       Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
                   },
               }
-          };
-          '''
-          if old not in text:
-              raise SystemExit("unix shutdown block did not match")
-          text = text.replace(old, new, 1)
-          old = '''        let shutdown_signal = async {
-              tokio::signal::ctrl_c()
-                  .await
-                  .expect("failed to register Ctrl-C handler");
-              tracing::info!("Received Ctrl-C");
-          };
-          '''
-          new = '''        let shutdown_signal = async {
+          };'''
+          text = text[:unix_start] + unix_replacement + text[unix_end:]
+
+          windows_cfg = text.index("    #[cfg(windows)]", unix_end)
+          windows_server = text.index("        let server = axum::serve(listener, app);", windows_cfg)
+          windows_start = text.index("        let shutdown_signal = async {", windows_server)
+          windows_end = text.index("\n\n        server.with_graceful_shutdown", windows_start)
+          windows_replacement = '''        let shutdown_signal = async {
               match tokio::signal::ctrl_c().await {
                   Ok(()) => tracing::info!("Received Ctrl-C"),
                   Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
               }
-          };
-          '''
-          if old not in text:
-              raise SystemExit("windows shutdown block did not match")
-          path.write_text(text.replace(old, new, 1))
+          };'''
+          text = text[:windows_start] + windows_replacement + text[windows_end:]
+          path.write_text(text)
 
-          # 2) Shell PATH resolution must recover from a stale/broken $SHELL and
-          #    Windows registry lookup failures must not bypass filesystem fallbacks.
+          # 2) Shell PATH resolution recovers from stale/broken $SHELL values.
           path = Path("crates/daemon/src/platform/shell.rs")
           text = path.read_text()
           start = text.index("/// Resolve the full PATH from the user's login shell.")
@@ -144,28 +134,11 @@ jobs:
 
           '''
           text = text[:start] + unix_block + text[end:]
-          old = '''    let output = Command::new("reg")
-              .args(["query", r"HKLM\\SOFTWARE\\GitForWindows", "/v", "InstallPath"])
-              .stdout(Stdio::piped())
-              .stderr(Stdio::null())
-              .output()
-              .ok()?;
 
-          let stdout = String::from_utf8_lossy(&output.stdout);
-          for line in stdout.lines() {
-              // Output line looks like: "    InstallPath    REG_SZ    C:\\Program Files\\Git"
-              if let Some(pos) = line.find("REG_SZ") {
-                  let path = line[pos + "REG_SZ".len()..].trim();
-                  if !path.is_empty() {
-                      let p = PathBuf::from(path);
-                      if p.is_dir() {
-                          return Some(p);
-                      }
-                  }
-              }
-          }
-          '''
-          new = '''    if let Ok(output) = Command::new("reg")
+          git_fn = text.index("fn find_git_install_dir()")
+          reg_start = text.index('    let output = Command::new("reg")', git_fn)
+          reg_end = text.index("\n\n    // Fallback: check well-known locations", reg_start)
+          reg_replacement = '''    if let Ok(output) = Command::new("reg")
               .args(["query", r"HKLM\\SOFTWARE\\GitForWindows", "/v", "InstallPath"])
               .stdout(Stdio::piped())
               .stderr(Stdio::null())
@@ -184,130 +157,98 @@ jobs:
                       }
                   }
               }
-          }
-          '''
-          if old not in text:
-              raise SystemExit("windows git registry block did not match")
-          text = text.replace(old, new, 1)
-          marker = '''    #[cfg(unix)]
-              #[test]
-              fn resolve_shell_path_returns_some_on_unix() {
-          '''
-          # Insert deterministic Unix regression coverage before the existing Unix test.
-          insert_at = text.index(marker)
-          tests = '''    #[cfg(unix)]
-              #[test]
-              fn missing_configured_shell_falls_back_to_bin_sh() {
-                  let path = resolve_shell_path_with(
-                      Some("/definitely/missing/homerun-shell"),
-                      Some("/inherited/fallback"),
-                  )
-                  .expect("/bin/sh should provide a fallback PATH");
-                  assert_ne!(path, "/inherited/fallback");
-              }
+          }'''
+          text = text[:reg_start] + reg_replacement + text[reg_end:]
 
-              #[cfg(unix)]
+          test_marker = '''    #[cfg(unix)]
               #[test]
-              fn missing_shell_command_is_reported_as_unavailable() {
-                  assert!(shell_path_from("/definitely/missing/homerun-shell").is_none());
-              }
+              fn resolve_shell_path_returns_some_on_unix() {'''
+          if test_marker not in text:
+              test_marker = '''    #[cfg(unix)]
+              #[test]
+              fn resolve_shell_path_returns_some_on_unix() {'''.replace("              ", "    ")
+          insert_at = text.index(test_marker)
+          tests = '''    #[cfg(unix)]
+          #[test]
+          fn missing_configured_shell_falls_back_to_bin_sh() {
+              let path = resolve_shell_path_with(
+                  Some("/definitely/missing/homerun-shell"),
+                  Some("/inherited/fallback"),
+              )
+              .expect("/bin/sh should provide a fallback PATH");
+              assert_ne!(path, "/inherited/fallback");
+          }
+
+          #[cfg(unix)]
+          #[test]
+          fn missing_shell_command_is_reported_as_unavailable() {
+              assert!(shell_path_from("/definitely/missing/homerun-shell").is_none());
+          }
 
           '''
           text = text[:insert_at] + tests + text[insert_at:]
           path.write_text(text)
 
-          # 3) launchd plist values are XML text and must be escaped.
+          # 3) launchd plist text values must be XML escaped.
           path = Path("crates/daemon/src/platform/service.rs")
           text = path.read_text()
+          if not text.startswith('#[cfg(target_os = "macos")]'):
+              raise SystemExit("service.rs prefix changed")
           prefix = '''#[cfg(any(target_os = "macos", test))]
-          fn xml_escape(value: &str) -> String {
-              let mut escaped = String::with_capacity(value.len());
-              for ch in value.chars() {
-                  match ch {
-                      '&' => escaped.push_str("&amp;"),
-                      '<' => escaped.push_str("&lt;"),
-                      '>' => escaped.push_str("&gt;"),
-                      '"' => escaped.push_str("&quot;"),
-                      '\\'' => escaped.push_str("&apos;"),
-                      _ => escaped.push(ch),
-                  }
-              }
-              escaped
+          fn xml_escape_text(value: &str) -> String {
+              value
+                  .replace('&', "&amp;")
+                  .replace('<', "&lt;")
+                  .replace('>', "&gt;")
           }
 
           '''
-          if not text.startswith('#[cfg(target_os = "macos")]'):
-              raise SystemExit("service.rs prefix changed")
           text = prefix + text
           text = text.replace(
-              '''mod macos {
-              use anyhow::{Context, Result};''',
-              '''mod macos {
-              use super::xml_escape;
-              use anyhow::{Context, Result};''',
+              "mod macos {\n    use anyhow::{Context, Result};",
+              "mod macos {\n    use super::xml_escape_text;\n    use anyhow::{Context, Result};",
               1,
           )
-          old = '''    fn resolve_shell_path() -> String {
-              let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-              if let Ok(output) = std::process::Command::new(&shell)
-                  .args(["-l", "-c", "echo $PATH"])
-                  .stdout(std::process::Stdio::piped())
-                  .stderr(std::process::Stdio::null())
-                  .output()
-              {
-                  let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                  if !path.is_empty() {
-                      return path;
-                  }
-              }
-              // Fallback to a sensible default
-              "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
-          }
-          '''
-          new = '''    fn resolve_shell_path() -> String {
+
+          resolver_start = text.index("    fn resolve_shell_path() -> String {")
+          resolver_end = text.index("\n\n    fn build_plist", resolver_start)
+          resolver = '''    fn resolve_shell_path() -> String {
               crate::platform::shell::resolve_shell_path().unwrap_or_else(|| {
                   "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
               })
-          }
-          '''
-          if old not in text:
-              raise SystemExit("macOS shell resolver block did not match")
-          text = text.replace(old, new, 1)
-          old = '''        let home = home_dir_str()?;
-              let path = resolve_shell_path();
-              Ok(format!(
-          '''
-          new = '''        let home = xml_escape(&home_dir_str()?);
-              let path = xml_escape(&resolve_shell_path());
-              let daemon_path = xml_escape(&daemon_path.display().to_string());
-              Ok(format!(
-          '''
+          }'''
+          text = text[:resolver_start] + resolver + text[resolver_end:]
+
+          old = "        let home = home_dir_str()?;\n        let path = resolve_shell_path();\n        Ok(format!("
+          new = "        let home = xml_escape_text(&home_dir_str()?);\n        let path = xml_escape_text(&resolve_shell_path());\n        let daemon_path = xml_escape_text(&daemon_path.display().to_string());\n        Ok(format!("
           if old not in text:
               raise SystemExit("build_plist values block did not match")
           text = text.replace(old, new, 1)
-          text = text.replace('<string>{}</string>', '<string>{daemon_path}</string>', 1)
-          text = text.replace('''</plist>"#,
-                  daemon_path.display(),
-              ))''', '''</plist>"#,
-              ))''', 1)
-          test_marker = '''    #[test]
-              fn test_is_daemon_installed_returns_bool() {
-          '''
+          text = text.replace("        <string>{}</string>", "        <string>{daemon_path}</string>", 1)
+          old_tail = '''</plist>"#,
+              daemon_path.display(),
+          ))'''
+          if old_tail not in text:
+              raise SystemExit("build_plist format tail did not match")
+          text = text.replace(old_tail, '''</plist>"#,
+          ))''', 1)
+
+          test_marker = "    #[test]\n    fn test_is_daemon_installed_returns_bool() {"
           insert_at = text.index(test_marker)
           tests = '''    #[test]
-              fn test_xml_escape_handles_reserved_plist_characters() {
-                  assert_eq!(
-                      xml_escape("A&B <runner> \\\"quoted\\\" 'single'"),
-                      "A&amp;B &lt;runner&gt; &quot;quoted&quot; &apos;single&apos;"
-                  );
-              }
+          fn test_xml_escape_text_handles_reserved_plist_characters() {
+              assert_eq!(
+                  xml_escape_text("A&B <runner> > logs"),
+                  "A&amp;B &lt;runner&gt; &gt; logs"
+              );
+          }
 
           '''
           text = text[:insert_at] + tests + text[insert_at:]
           path.write_text(text)
           PY
 
-          cargo fmt --all -- --check || cargo fmt --all
+          cargo fmt --all
           cargo fmt --all -- --check
           cargo test --locked -p homerund
 
