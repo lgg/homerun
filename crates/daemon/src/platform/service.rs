@@ -1,5 +1,14 @@
+#[cfg(any(target_os = "macos", test))]
+fn xml_escape_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
+    use super::xml_escape_text;
     use anyhow::{Context, Result};
     use std::path::{Path, PathBuf};
 
@@ -17,25 +26,15 @@ mod macos {
     }
 
     fn resolve_shell_path() -> String {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        if let Ok(output) = std::process::Command::new(&shell)
-            .args(["-l", "-c", "echo $PATH"])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .output()
-        {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return path;
-            }
-        }
-        // Fallback to a sensible default
-        "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+        crate::platform::shell::resolve_shell_path().unwrap_or_else(|| {
+            "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+        })
     }
 
     fn build_plist(daemon_path: &Path) -> Result<String> {
-        let home = home_dir_str()?;
-        let path = resolve_shell_path();
+        let home = xml_escape_text(&home_dir_str()?);
+        let path = xml_escape_text(&resolve_shell_path());
+        let daemon_path = xml_escape_text(&daemon_path.display().to_string());
         Ok(format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -45,7 +44,7 @@ mod macos {
     <string>{PLIST_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{}</string>
+        <string>{daemon_path}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -62,7 +61,6 @@ mod macos {
     <string>{home}/.homerun/logs/daemon.err</string>
 </dict>
 </plist>"#,
-            daemon_path.display(),
         ))
     }
 
@@ -251,6 +249,14 @@ pub use windows::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_xml_escape_text_handles_reserved_plist_characters() {
+        assert_eq!(
+            xml_escape_text("A&B <runner> > logs"),
+            "A&amp;B &lt;runner&gt; &gt; logs"
+        );
+    }
 
     #[test]
     fn test_is_daemon_installed_returns_bool() {

@@ -322,14 +322,22 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
 
         let server = axum::serve(listener, app);
 
-        let shutdown_signal = async {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to register SIGTERM handler");
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let shutdown_signal = async move {
             let sigint = tokio::signal::ctrl_c();
             tokio::select! {
-                _ = sigterm.recv() => tracing::info!("Received SIGTERM"),
-                _ = sigint => tracing::info!("Received SIGINT"),
+                signal = sigterm.recv() => {
+                    if signal.is_some() {
+                        tracing::info!("Received SIGTERM");
+                    } else {
+                        tracing::warn!("SIGTERM handler closed; shutting down");
+                    }
+                }
+                signal = sigint => match signal {
+                    Ok(()) => tracing::info!("Received SIGINT"),
+                    Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
+                },
             }
         };
 
@@ -349,10 +357,10 @@ pub async fn serve(config: Config, daemon_logs: DaemonLogState) -> Result<()> {
         let server = axum::serve(listener, app);
 
         let shutdown_signal = async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("failed to register Ctrl-C handler");
-            tracing::info!("Received Ctrl-C");
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => tracing::info!("Received Ctrl-C"),
+                Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
+            }
         };
 
         server.with_graceful_shutdown(shutdown_signal).await?;
