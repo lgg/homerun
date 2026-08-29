@@ -1,0 +1,239 @@
+name: Finalize runtime hardening patch
+
+on:
+  push:
+    branches: [fix/runtime-signal-shell-plist-hardening]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/runtime-signal-shell-plist-hardening
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply runtime hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # server.rs: replace panic-prone shutdown handlers using structural boundaries.
+          path = Path("crates/daemon/src/server.rs")
+          text = path.read_text()
+          bind = text.index("// --- Platform-specific: bind listener, serve, shutdown ---")
+          unix_server = text.index("        let server = axum::serve(listener, app);", bind)
+          start = text.index("        let shutdown_signal = async {", unix_server)
+          end = text.index("\n\n        server.with_graceful_shutdown", start)
+          text = text[:start] + '''        let mut sigterm =
+              tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+          let shutdown_signal = async move {
+              let sigint = tokio::signal::ctrl_c();
+              tokio::select! {
+                  signal = sigterm.recv() => {
+                      if signal.is_some() {
+                          tracing::info!("Received SIGTERM");
+                      } else {
+                          tracing::warn!("SIGTERM handler closed; shutting down");
+                      }
+                  }
+                  signal = sigint => match signal {
+                      Ok(()) => tracing::info!("Received SIGINT"),
+                      Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
+                  },
+              }
+          };''' + text[end:]
+
+          windows = text.index("    #[cfg(windows)]", end)
+          windows_server = text.index("        let server = axum::serve(listener, app);", windows)
+          start = text.index("        let shutdown_signal = async {", windows_server)
+          end = text.index("\n\n        server.with_graceful_shutdown", start)
+          text = text[:start] + '''        let shutdown_signal = async {
+              match tokio::signal::ctrl_c().await {
+                  Ok(()) => tracing::info!("Received Ctrl-C"),
+                  Err(error) => tracing::error!(%error, "Ctrl-C handler failed; shutting down"),
+              }
+          };''' + text[end:]
+          path.write_text(text)
+
+          # shell.rs: configured shell -> /bin/sh -> inherited PATH.
+          path = Path("crates/daemon/src/platform/shell.rs")
+          text = path.read_text()
+          start = text.index("/// Resolve the full PATH from the user's login shell.")
+          end = text.index("/// On Windows the system PATH is usually inherited")
+          text = text[:start] + '''/// Resolve PATH by asking one concrete Unix shell.
+          #[cfg(unix)]
+          fn shell_path_from(shell: &str) -> Option<String> {
+              use std::process::Stdio;
+
+              let output = std::process::Command::new(shell)
+                  .args(["-l", "-c", "echo $PATH"])
+                  .stdout(Stdio::piped())
+                  .stderr(Stdio::null())
+                  .output()
+                  .ok()?;
+              if !output.status.success() {
+                  return None;
+              }
+
+              let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+              (!path.is_empty()).then_some(path)
+          }
+
+          #[cfg(unix)]
+          fn resolve_shell_path_with(
+              configured_shell: Option<&str>,
+              inherited_path: Option<&str>,
+          ) -> Option<String> {
+              if let Some(shell) = configured_shell {
+                  if let Some(path) = shell_path_from(shell) {
+                      return Some(path);
+                  }
+              }
+
+              if configured_shell != Some("/bin/sh") {
+                  if let Some(path) = shell_path_from("/bin/sh") {
+                      return Some(path);
+                  }
+              }
+
+              inherited_path
+                  .map(str::trim)
+                  .filter(|path| !path.is_empty())
+                  .map(ToOwned::to_owned)
+          }
+
+          /// Resolve the full PATH from the user's login shell, retrying /bin/sh
+          /// when SHELL points at a stale or removed executable.
+          #[cfg(unix)]
+          pub fn resolve_shell_path() -> Option<String> {
+              let shell = std::env::var("SHELL").ok();
+              let inherited_path = std::env::var("PATH").ok();
+              resolve_shell_path_with(shell.as_deref(), inherited_path.as_deref())
+          }
+
+          ''' + text[end:]
+
+          git_fn = text.index("fn find_git_install_dir()")
+          reg_start = text.index('    let output = Command::new("reg")', git_fn)
+          reg_end = text.index("\n\n    // Fallback: check well-known locations", reg_start)
+          text = text[:reg_start] + '''    if let Ok(output) = Command::new("reg")
+              .args(["query", r"HKLM\\SOFTWARE\\GitForWindows", "/v", "InstallPath"])
+              .stdout(Stdio::piped())
+              .stderr(Stdio::null())
+              .output()
+          {
+              let stdout = String::from_utf8_lossy(&output.stdout);
+              for line in stdout.lines() {
+                  if let Some(pos) = line.find("REG_SZ") {
+                      let path = line[pos + "REG_SZ".len()..].trim();
+                      if !path.is_empty() {
+                          let p = PathBuf::from(path);
+                          if p.is_dir() {
+                              return Some(p);
+                          }
+                      }
+                  }
+              }
+          }''' + text[reg_end:]
+
+          marker = "    #[cfg(unix)]\n    #[test]\n    fn resolve_shell_path_returns_some_on_unix() {"
+          insert = text.index(marker)
+          text = text[:insert] + '''    #[cfg(unix)]
+          #[test]
+          fn missing_configured_shell_falls_back_to_bin_sh() {
+              let path = resolve_shell_path_with(
+                  Some("/definitely/missing/homerun-shell"),
+                  Some("/inherited/fallback"),
+              )
+              .expect("/bin/sh should provide a fallback PATH");
+              assert_ne!(path, "/inherited/fallback");
+          }
+
+          #[cfg(unix)]
+          #[test]
+          fn missing_shell_command_is_reported_as_unavailable() {
+              assert!(shell_path_from("/definitely/missing/homerun-shell").is_none());
+          }
+
+          ''' + text[insert:]
+          path.write_text(text)
+
+          # service.rs: reuse shell resolver and XML-escape launchd text nodes.
+          path = Path("crates/daemon/src/platform/service.rs")
+          text = path.read_text()
+          prefix = '''#[cfg(any(target_os = "macos", test))]
+          fn xml_escape_text(value: &str) -> String {
+              value
+                  .replace('&', "&amp;")
+                  .replace('<', "&lt;")
+                  .replace('>', "&gt;")
+          }
+
+          '''
+          if not text.startswith('#[cfg(target_os = "macos")]'):
+              raise SystemExit("unexpected service.rs prefix")
+          text = prefix + text
+          text = text.replace(
+              "mod macos {\n    use anyhow::{Context, Result};",
+              "mod macos {\n    use super::xml_escape_text;\n    use anyhow::{Context, Result};",
+              1,
+          )
+          resolver_start = text.index("    fn resolve_shell_path() -> String {")
+          resolver_end = text.index("\n\n    fn build_plist", resolver_start)
+          text = text[:resolver_start] + '''    fn resolve_shell_path() -> String {
+              crate::platform::shell::resolve_shell_path().unwrap_or_else(|| {
+                  "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+              })
+          }''' + text[resolver_end:]
+
+          build = text.index("    fn build_plist(daemon_path: &Path) -> Result<String> {")
+          old = "        let home = home_dir_str()?;\n        let path = resolve_shell_path();\n        Ok(format!("
+          new = "        let home = xml_escape_text(&home_dir_str()?);\n        let path = xml_escape_text(&resolve_shell_path());\n        let daemon_path = xml_escape_text(&daemon_path.display().to_string());\n        Ok(format!("
+          if old not in text[build:]:
+              raise SystemExit("unexpected build_plist value block")
+          text = text[:build] + text[build:].replace(old, new, 1)
+          text = text[:build] + text[build:].replace("        <string>{}</string>", "        <string>{daemon_path}</string>", 1)
+          tail_start = text.index('</plist>"#,', build)
+          tail_end = text.index("        ))", tail_start) + len("        ))")
+          text = text[:tail_start] + '''</plist>"#,
+              ))''' + text[tail_end:]
+
+          marker = "    #[test]\n    fn test_is_daemon_installed_returns_bool() {"
+          insert = text.index(marker)
+          text = text[:insert] + '''    #[test]
+          fn test_xml_escape_text_handles_reserved_plist_characters() {
+              assert_eq!(
+                  xml_escape_text("A&B <runner> > logs"),
+                  "A&amp;B &lt;runner&gt; &gt; logs"
+              );
+          }
+
+          ''' + text[insert:]
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test --locked -p homerund
+
+      - name: Commit product patch and remove helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/runtime-hardening-patch.yml
+          git rm .github/workflows/runtime-hardening-patch-v3.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/daemon/src/server.rs crates/daemon/src/platform/shell.rs crates/daemon/src/platform/service.rs
+          git commit -m "fix: harden daemon runtime platform handling"
+          git push origin HEAD:fix/runtime-signal-shell-plist-hardening
