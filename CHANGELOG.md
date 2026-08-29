@@ -9,6 +9,12 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.11.1](https://github.com/lgg/homerun/compare/v0.11.0...v0.11.1) (2026-08-29)
+
+### Bug Fixes
+
+* harden daemon runtime platform handling ([#43](https://github.com/lgg/homerun/issues/43))
+
 ## [0.11.0](https://github.com/lgg/homerun/compare/v0.10.3...v0.11.0) (2026-08-28)
 
 ### Features
