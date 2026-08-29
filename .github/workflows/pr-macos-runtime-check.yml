@@ -1,0 +1,21 @@
+name: PR macOS Runtime Check
+
+on:
+  push:
+    branches: [fix/runtime-signal-shell-plist-hardening]
+
+jobs:
+  macos-runtime:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Test daemon on macOS
+        run: cargo test --locked -p homerund
+      - name: Strict daemon clippy on macOS
+        run: cargo clippy --locked -p homerund --all-targets -- -D warnings
