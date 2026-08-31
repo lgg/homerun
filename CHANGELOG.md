@@ -9,6 +9,12 @@ This file is auto-generated from [Conventional Commits](https://www.conventional
 
 ---
 
+## [0.11.2](https://github.com/lgg/homerun/compare/v0.11.1...v0.11.2) (2026-08-31)
+
+### Bug Fixes
+
+* allow mini view dragging across displays ([#45](https://github.com/lgg/homerun/issues/45))
+
 ## [0.11.1](https://github.com/lgg/homerun/compare/v0.11.0...v0.11.1) (2026-08-29)
 
 ### Bug Fixes
