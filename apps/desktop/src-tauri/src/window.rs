@@ -144,7 +144,9 @@ fn default_position_on_monitor(
     )
 }
 
-/// Keep the mini window fully inside the work area of a connected monitor.
+/// Keep the mini window fully inside the work area of a connected monitor when
+/// it is being activated. Do not call this from move/drag events: valid monitors
+/// in a multi-display virtual desktop can use negative coordinates.
 ///
 /// Returns `true` when the window already overlapped a connected monitor, and
 /// `false` when it had to be recovered from a completely off-screen position.
@@ -187,18 +189,6 @@ fn keep_mini_window_on_screen(win: &WebviewWindow) -> Result<bool, tauri::Error>
     }
 
     Ok(had_visible_overlap)
-}
-
-fn install_mini_window_bounds_handler(win: &WebviewWindow) {
-    let mini = win.clone();
-    win.on_window_event(move |event| {
-        if matches!(
-            event,
-            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
-        ) {
-            let _ = keep_mini_window_on_screen(&mini);
-        }
-    });
 }
 
 fn show_mini_window(app: &AppHandle, win: &WebviewWindow) -> Result<(), String> {
@@ -260,7 +250,6 @@ pub fn toggle_mini_window(app: &AppHandle) -> Result<(), String> {
         .visible(false);
 
     let win = builder.build().map_err(|e: tauri::Error| e.to_string())?;
-    install_mini_window_bounds_handler(&win);
 
     // Restore the previous position first, then validate it against the
     // currently connected monitors. Stale positions from a removed/rearranged
@@ -403,24 +392,11 @@ fn position_near_tray(
     Ok(())
 }
 
-/// Save mini window position to local app data.
+/// Save the exact position selected by the user. Negative coordinates are valid
+/// for monitors placed left of or above the primary display. Stale/off-screen
+/// saved positions are repaired only when Mini View is shown again.
 pub fn save_mini_pos(app: &AppHandle, x: f64, y: f64) -> Result<(), String> {
-    let mut position = MiniPosition { x, y };
-
-    // Snap a user-dragged window fully into a monitor work area before saving
-    // so the persisted position can never intentionally strand it off-screen.
-    if let Some(win) = app.get_webview_window(MINI_LABEL) {
-        let _ = keep_mini_window_on_screen(&win);
-        if let (Ok(actual), Ok(scale)) = (win.outer_position(), win.scale_factor()) {
-            if scale > 0.0 {
-                position = MiniPosition {
-                    x: actual.x as f64 / scale,
-                    y: actual.y as f64 / scale,
-                };
-            }
-        }
-    }
-
+    let position = MiniPosition { x, y };
     let path = mini_position_path(app)?;
     let json = serde_json::to_string(&position).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
